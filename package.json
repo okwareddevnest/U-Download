@@ -1,0 +1,48 @@
+{
+  "name": "u-download",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Fast, cross-platform YouTube downloader with GUI",
+  "author": "Dedan Okware <softengde@gmail.com>",
+  "license": "MIT",
+  "homepage": "https://github.com/okwareddevnet/u-download",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/okwareddevnet/u-download.git"
+  },
+  "bugs": {
+    "url": "https://github.com/okwareddevnet/u-download/issues"
+  },
+  "keywords": ["youtube", "downloader", "desktop", "tauri", "rust", "react"],
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "tauri": "tauri",
+    "tauri:build": "tauri build",
+    "tauri:dev": "tauri dev",
+    "version:patch": "./scripts/version-sync.sh $(npm version patch --no-git-tag-version | sed 's/^v//')",
+    "version:minor": "./scripts/version-sync.sh $(npm version minor --no-git-tag-version | sed 's/^v//')",
+    "version:major": "./scripts/version-sync.sh $(npm version major --no-git-tag-version | sed 's/^v//')",
+    "release:patch": "npm run version:patch && git add . && git commit -m \"chore: bump version\" && git push --follow-tags",
+    "release:minor": "npm run version:minor && git add . && git commit -m \"chore: bump version\" && git push --follow-tags", 
+    "release:major": "npm run version:major && git add . && git commit -m \"chore: bump version\" && git push --follow-tags"
+  },
+  "dependencies": {
+    "@tauri-apps/api": "^2",
+    "@tauri-apps/plugin-dialog": "^2.3.3",
+    "@tauri-apps/plugin-opener": "^2.2.3",
+    "@tauri-apps/plugin-store": "^2.4.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0"
+  },
+  "devDependencies": {
+    "@tauri-apps/cli": "^2",
+    "@vitejs/plugin-react": "^4.6.0",
+    "autoprefixer": "^10.4.21",
+    "postcss": "^8.5.6",
+    "tailwindcss": "^3.4.17",
+    "vite": "^7.0.4"
+  }
+}

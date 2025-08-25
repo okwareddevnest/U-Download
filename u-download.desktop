@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=U-Download
+Comment=Fast YouTube downloader
+Exec=/home/okware/Software Projects/u-download/src-tauri/target/release/u-download
+Icon=/home/okware/Software Projects/u-download/src-tauri/icons/256x256.png
+Terminal=false
+StartupWMClass=u-download
+Categories=AudioVideo;Video;Utility;
+Keywords=youtube;download;video;audio;
