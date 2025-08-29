@@ -1,185 +1,66 @@
-# U-Download
+# U‑Download
 
-A beautiful, fast, and cross-platform YouTube downloader built with React, Tailwind CSS, and Tauri (Rust).
+Fast, cross‑platform YouTube downloader with a modern UI. Powered by `yt-dlp` + `aria2c` for top speed.
+
+## Download
+
+- Latest release (always up to date):
+  - https://github.com/okwareddevnet/u-download/releases/latest
+- Current version: v2.0.1
+  - https://github.com/okwareddevnet/u-download/releases/tag/v2.0.1
+
+Pick the installer for your OS from the “Assets” section of the release:
+
+- Linux: `.AppImage`, `.deb`, or `.rpm`
+  - AppImage: `chmod +x *.AppImage && ./*.AppImage`
+  - Deb: `sudo dpkg -i U-Download_*_amd64.deb`
+  - Rpm: `sudo rpm -i U-Download-*.x86_64.rpm`
+- Windows: NSIS `.exe` installer
+- macOS: `.dmg` (Intel and Apple Silicon), drag to Applications
+
+Note: binaries aren’t codesigned. On macOS, allow the app in System Settings → Privacy & Security if prompted.
 
 ## Features
 
-🚀 **High-Performance Downloads**
-- Powered by `yt-dlp` + `aria2c` for maximum speed
-- Real-time progress tracking with speed and ETA
-- Support for multiple quality options (360p, 480p, 720p, 1080p, best)
-
-🎨 **Modern UI/UX**
-- Beautiful card-based interface built with Tailwind CSS  
-- Dark/light theme toggle with persistence
-- Responsive design and smooth animations
-- URL validation with visual feedback
-
-📁 **Flexible Output**
-- MP4 (video) and MP3 (audio) download options
-- Native file picker for output folder selection
-- Settings persistence (remembers your preferences)
-
-⚡ **Cross-Platform**
-- Linux: AppImage, .deb packages
-- Windows: .exe installer, .msi
-- macOS: .app, .dmg
+- High‑speed downloads via `yt-dlp` + `aria2c`
+- Live progress with speed and ETA
+- MP4 (video) and MP3 (audio)
+- Quality presets: 360p / 480p / 720p / 1080p / best
+- Trim video to the second (slider + manual inputs)
+- Dark/Light theme and settings persistence
 
 ## Requirements
 
-Before running U-Download, make sure you have these dependencies installed:
+Install these once on your system:
 
-- **yt-dlp**: YouTube downloader
-- **aria2c**: Multi-connection download accelerator
+- yt‑dlp (required)
+- aria2c (required)
+- ffmpeg (optional; required for trimming)
 
-### Installation Commands
+Quick install:
 
-**Ubuntu/Debian:**
-```bash
-sudo apt update
-sudo apt install yt-dlp aria2
-```
+- Ubuntu/Debian: `sudo apt update && sudo apt install yt-dlp aria2 ffmpeg`
+- macOS (Homebrew): `brew install yt-dlp aria2 ffmpeg`
+- Windows (Chocolatey): `choco install yt-dlp aria2 ffmpeg`
 
-**macOS (Homebrew):**
-```bash
-brew install yt-dlp aria2
-```
+## How to Use
 
-**Windows (Chocolatey):**
-```powershell
-choco install yt-dlp aria2
-```
+1. Paste a YouTube URL
+2. Choose MP4/MP3 and quality
+3. Select an output folder
+4. (Optional) Use Trim to set start/end times (per‑second accuracy)
+5. Click Start Download and watch progress, speed, and ETA
 
-## Installation & Desktop Icon
+## Troubleshooting
 
-### Installing the Application
-
-To install U-Download with proper desktop integration and icon:
-
-1. Build the application:
-```bash
-npm run tauri build -- --no-bundle
-```
-
-2. Run the installation script:
-```bash
-./install.sh
-```
-
-This will:
-- Install the application icon to `~/.local/share/icons/hicolor/256x256/apps/`
-- Create a desktop entry in `~/.local/share/applications/`
-- Update the icon cache for immediate availability
-
-### Desktop Icon Issues Fixed
-
-The following issues were resolved:
-- **Corrupted ICO file**: The original Windows icon file was corrupted and has been recreated
-- **Incorrect PNG format**: All PNG icons were converted to proper RGBA format
-- **Missing desktop integration**: Added proper .desktop file and installation script
-- **Icon sizing**: Created icons in all required sizes (32x32, 128x128, 256x256, 512x512)
-- **High-DPI support**: Added 128x128@2x.png for high-DPI displays
-
-### Video Quality Improvements
-
-The video download quality has been significantly improved:
-
-- **Better Format Selection**: Now uses `bestvideo[height<=RESOLUTION]+bestaudio` for optimal quality within each resolution
-- **Consistent Output**: Added `--merge-output-format mp4` for consistent MP4 output
-- **Codec Optimization**: Added `--prefer-free-formats` to avoid proprietary codecs when possible
-- **Quality Assurance**: Each resolution now gets the best available quality for that specific height
-
-**Quality Options:**
-- 📱 **360p (Mobile)**: Best video quality up to 360p resolution
-- 💻 **480p (Standard)**: Best video quality up to 480p resolution
-- 🖥️ **720p (HD)**: Best video quality up to 720p resolution
-- 🎯 **1080p (Full HD)**: Best video quality up to 1080p resolution
-
-## Development
-
-### Prerequisites
-- Node.js (LTS version)
-- Rust (latest stable)
-- System dependencies for Tauri
-
-### Setup
-```bash
-# Clone the repository
-git clone <repository-url>
-cd u-download
-
-# Install frontend dependencies
-npm install
-
-# Run in development mode
-npm run tauri dev
-```
-
-### Building
-```bash
-# Build for production
-npm run tauri build
-```
-
-### Project Structure
-```
-u-download/
-├── src/                    # React frontend
-│   ├── App.jsx            # Main application component
-│   └── App.css            # Tailwind CSS imports
-├── src-tauri/             # Rust backend
-│   ├── src/lib.rs         # Main Tauri application logic
-│   ├── Cargo.toml         # Rust dependencies
-│   └── tauri.conf.json    # Tauri configuration
-└── package.json           # Node.js dependencies
-```
-
-## Usage
-
-1. **Enter YouTube URL**: Paste any YouTube video URL
-2. **Select Format**: Choose between MP4 (video) or MP3 (audio)
-3. **Choose Quality**: Select from 360p to 1080p, or "Best Available"
-4. **Pick Output Folder**: Use the file browser to select where to save
-5. **Start Download**: Click the download button and watch real-time progress
-
-## Technical Details
-
-### Frontend (React + Tailwind)
-- **React 19** with hooks for state management
-- **Tailwind CSS** for styling and responsive design
-- **Real-time progress** via Tauri event system
-- **LocalStorage** for settings persistence
-
-### Backend (Rust + Tauri)
-- **yt-dlp integration** for YouTube video extraction
-- **aria2c integration** for high-speed multi-connection downloads
-- **Real-time progress parsing** from download output
-- **Cross-platform file dialogs** for folder selection
-
-### Download Command
-```bash
-yt-dlp \
-  --external-downloader aria2c \
-  --external-downloader-args "-x 16 -s 16 -k 1M" \
-  --progress --newline \
-  -o "output_folder/%(title)s.%(ext)s" \
-  -f "format_selector" \
-  "video_url"
-```
-
-## Packaging & Distribution
-
-The project includes automated CI/CD with GitHub Actions:
-
-- **Triggers**: On version tag push (`v*`)
-- **Platforms**: Linux, Windows, macOS (both Intel and Apple Silicon)
-- **Artifacts**: AppImage, .deb, .exe, .msi, .dmg, .app
-- **Checksums**: SHA256SUMS.txt for verification
+- “yt-dlp/aria2c not found”: install using the commands above
+- Trimming fails: ensure `ffmpeg` is installed
+- Linux AppImage won’t start: `chmod +x` then run from a writable folder
 
 ## License
 
-Copyright © 2025 U-Download. All rights reserved.
+MIT
 
----
+—
 
-**Made with ❤️ using React, Tailwind CSS, and Tauri**
+Made with ❤️ using React, Tailwind CSS, and Tauri
