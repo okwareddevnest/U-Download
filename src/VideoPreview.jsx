@@ -9,6 +9,10 @@ const VideoPreview = ({ url, onTimeSelect, isVisible }) => {
   const [videoData, setVideoData] = useState(null);
   const [startTime, setStartTime] = useState(null);
   const [endTime, setEndTime] = useState(null);
+  const [startInput, setStartInput] = useState('');
+  const [endInput, setEndInput] = useState('');
+  const [startError, setStartError] = useState('');
+  const [endError, setEndError] = useState('');
 
   useEffect(() => {
     if (url && isVisible) {
@@ -41,8 +45,37 @@ const VideoPreview = ({ url, onTimeSelect, isVisible }) => {
     }
   };
 
+  // Format seconds -> mm:ss (supports long minutes)
+  const formatTime = (time) => {
+    const t = Math.max(0, Math.floor(time || 0));
+    const minutes = Math.floor(t / 60);
+    const seconds = t % 60;
+    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  };
+
+  // Parse HH:MM:SS | MM:SS | SS -> seconds (int)
+  const parseTimeToSeconds = (value) => {
+    const s = String(value || '').trim();
+    if (!s) return NaN;
+    const parts = s.split(':').map((p) => p.trim());
+    if (parts.some((p) => p === '' || isNaN(Number(p)))) return NaN;
+    let total = 0;
+    if (parts.length === 1) {
+      total = Math.floor(Number(parts[0]));
+    } else if (parts.length === 2) {
+      const [m, sec] = parts.map((p) => Math.floor(Number(p)));
+      total = m * 60 + sec;
+    } else if (parts.length === 3) {
+      const [h, m, sec] = parts.map((p) => Math.floor(Number(p)));
+      total = h * 3600 + m * 60 + sec;
+    } else {
+      return NaN;
+    }
+    return total;
+  };
+
   const handleSeek = (e) => {
-    const newTime = (e.target.value / 100) * duration;
+    const newTime = Math.max(0, Math.min(Number(e.target.value), Math.max(1, Math.floor(duration || 0))));
     setCurrentTime(newTime);
   };
 
@@ -68,10 +101,37 @@ const VideoPreview = ({ url, onTimeSelect, isVisible }) => {
     }
   };
 
-  const formatTime = (time) => {
-    const minutes = Math.floor(time / 60);
-    const seconds = Math.floor(time % 60);
-    return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+  // Sync manual input fields when times are set via buttons or external state
+  useEffect(() => {
+    setStartInput(startTime != null ? formatTime(startTime) : '');
+  }, [startTime]);
+
+  useEffect(() => {
+    setEndInput(endTime != null ? formatTime(endTime) : '');
+  }, [endTime]);
+
+  const applyStartInput = () => {
+    setStartError('');
+    const secs = parseTimeToSeconds(startInput);
+    if (isNaN(secs)) {
+      setStartError('Invalid time. Use SS, MM:SS or HH:MM:SS');
+      return;
+    }
+    const clamped = Math.max(0, Math.min(secs, Math.floor(duration || 0)));
+    setStartTime(clamped);
+    if (onTimeSelect) onTimeSelect('start', clamped);
+  };
+
+  const applyEndInput = () => {
+    setEndError('');
+    const secs = parseTimeToSeconds(endInput);
+    if (isNaN(secs)) {
+      setEndError('Invalid time. Use SS, MM:SS or HH:MM:SS');
+      return;
+    }
+    const clamped = Math.max(0, Math.min(secs, Math.floor(duration || 0)));
+    setEndTime(clamped);
+    if (onTimeSelect) onTimeSelect('end', clamped);
   };
 
   if (!isVisible) return null;
@@ -146,14 +206,15 @@ const VideoPreview = ({ url, onTimeSelect, isVisible }) => {
 
       {/* Controls */}
       <div className="bg-gray-800 p-4">
-        {/* Progress Bar */}
+        {/* Progress Bar (per-second precision) */}
         <div className="mb-4">
           <div className="relative">
             <input
               type="range"
               min="0"
-              max="100"
-              value={(currentTime / duration) * 100 || 0}
+              max={Math.max(1, Math.floor(duration || 0))}
+              step={1}
+              value={Math.max(0, Math.min(Math.floor(currentTime || 0), Math.max(1, Math.floor(duration || 0))))}
               onChange={handleSeek}
               className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer slider"
             />
@@ -212,6 +273,52 @@ const VideoPreview = ({ url, onTimeSelect, isVisible }) => {
             >
               Clear
             </button>
+          </div>
+        </div>
+
+        {/* Manual Start/End Inputs */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">Start (SS, MM:SS or HH:MM:SS)</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={startInput}
+                onChange={(e) => setStartInput(e.target.value)}
+                onBlur={applyStartInput}
+                onKeyDown={(e) => { if (e.key === 'Enter') applyStartInput(); }}
+                placeholder="0:00"
+                className="flex-1 bg-gray-700 text-white px-3 py-2 rounded-lg outline-none border border-gray-600 focus:border-green-500"
+              />
+              <button
+                onClick={applyStartInput}
+                className="px-3 py-2 rounded-lg bg-green-600 hover:bg-green-500 text-white text-sm font-medium"
+              >
+                Apply
+              </button>
+            </div>
+            {startError && <p className="text-red-400 text-xs mt-1">{startError}</p>}
+          </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">End (SS, MM:SS or HH:MM:SS)</label>
+            <div className="flex gap-2">
+              <input
+                type="text"
+                value={endInput}
+                onChange={(e) => setEndInput(e.target.value)}
+                onBlur={applyEndInput}
+                onKeyDown={(e) => { if (e.key === 'Enter') applyEndInput(); }}
+                placeholder={formatTime(duration)}
+                className="flex-1 bg-gray-700 text-white px-3 py-2 rounded-lg outline-none border border-gray-600 focus:border-red-500"
+              />
+              <button
+                onClick={applyEndInput}
+                className="px-3 py-2 rounded-lg bg-red-600 hover:bg-red-500 text-white text-sm font-medium"
+              >
+                Apply
+              </button>
+            </div>
+            {endError && <p className="text-red-400 text-xs mt-1">{endError}</p>}
           </div>
         </div>
 

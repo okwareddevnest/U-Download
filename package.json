@@ -25,9 +25,9 @@
     "version:patch": "./scripts/version-sync.sh $(npm version patch --no-git-tag-version | sed 's/^v//')",
     "version:minor": "./scripts/version-sync.sh $(npm version minor --no-git-tag-version | sed 's/^v//')",
     "version:major": "./scripts/version-sync.sh $(npm version major --no-git-tag-version | sed 's/^v//')",
-    "release:patch": "npm run version:patch && git add . && git commit -m \"chore: bump version\" && git push --follow-tags",
-    "release:minor": "npm run version:minor && git add . && git commit -m \"chore: bump version\" && git push --follow-tags", 
-    "release:major": "npm run version:major && git add . && git commit -m \"chore: bump version\" && git push --follow-tags"
+    "release:patch": "npm run version:patch && V=$(node -p \"require('./package.json').version\") && git add . && git commit -m \"chore: release v$V\" && git tag -a v$V -m \"Release v$V\" && git push origin HEAD && git push origin v$V",
+    "release:minor": "npm run version:minor && V=$(node -p \"require('./package.json').version\") && git add . && git commit -m \"chore: release v$V\" && git tag -a v$V -m \"Release v$V\" && git push origin HEAD && git push origin v$V", 
+    "release:major": "npm run version:major && V=$(node -p \"require('./package.json').version\") && git add . && git commit -m \"chore: release v$V\" && git tag -a v$V -m \"Release v$V\" && git push origin HEAD && git push origin v$V"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

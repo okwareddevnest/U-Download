@@ -1,132 +1,91 @@
-name: 'Release'
+name: release
 
 on:
   push:
     tags:
       - 'v*'
 
+permissions:
+  contents: write
+
 jobs:
-  create-release:
-    permissions:
-      contents: write
+  prepare:
     runs-on: ubuntu-latest
     outputs:
-      release_id: ${{ steps.create-release.outputs.result }}
-
+      release_id: ${{ steps.create_release.outputs.id }}
+      tag_name: ${{ steps.vars.outputs.tag }}
     steps:
       - uses: actions/checkout@v4
-      - name: setup node
-        uses: actions/setup-node@v4
         with:
-          node-version: lts/*
-      - name: get version
-        run: echo "PACKAGE_VERSION=$(node -pe "require('./package.json').version")" >> $GITHUB_ENV
-      - name: create release
-        id: create-release
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const { data } = await github.rest.repos.createRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              tag_name: `v${process.env.PACKAGE_VERSION}`,
-              name: `U-Download v${process.env.PACKAGE_VERSION}`,
-              body: 'Take a look at the assets to download and install this app.',
-              draft: true,
-              prerelease: false
-            })
-            return data.id
+          fetch-depth: 0
 
-  build-tauri:
-    needs: create-release
-    permissions:
-      contents: write
+      - id: vars
+        run: |
+          echo "tag=${GITHUB_REF_NAME}" >> $GITHUB_OUTPUT
+
+      - name: Generate release notes
+        run: |
+          chmod +x scripts/generate-release-notes.sh
+          TAG=${GITHUB_REF_NAME} scripts/generate-release-notes.sh RELEASE_BODY.md
+          echo "Generated RELEASE_BODY.md:"; echo "===="; sed -n '1,120p' RELEASE_BODY.md || true
+
+      - id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: U-Download ${{ github.ref_name }}
+          draft: true
+          body_path: RELEASE_BODY.md
+
+  build:
+    needs: prepare
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: 'macos-latest'
+          - platform: ubuntu-22.04
+            args: ''
+          - platform: macos-latest
             args: '--target aarch64-apple-darwin'
-          - platform: 'macos-latest'
+          - platform: macos-latest
             args: '--target x86_64-apple-darwin'
-          - platform: 'ubuntu-22.04'
+          - platform: windows-latest
             args: ''
-          - platform: 'windows-latest'
-            args: ''
-
     runs-on: ${{ matrix.platform }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: setup node
+      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
 
-      - name: install Rust stable
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+          targets: ${{ contains(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: install dependencies (ubuntu only)
-        if: matrix.platform == 'ubuntu-22.04'
+      - name: Install Linux dependencies
+        if: startsWith(matrix.platform, 'ubuntu')
         run: |
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.0-dev libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf yt-dlp aria2
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            patchelf
 
-      - name: install dependencies (macOS only)
-        if: matrix.platform == 'macos-latest'
-        run: |
-          brew install yt-dlp aria2
+      - name: Install frontend dependencies
+        run: npm ci
 
-      - name: install dependencies (Windows only)
-        if: matrix.platform == 'windows-latest'
-        run: |
-          choco install yt-dlp aria2 -y
-
-      - name: install frontend dependencies
-        run: npm install
-
-      - uses: tauri-apps/tauri-action@v0
+      - name: Build and upload with Tauri Action
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          releaseId: ${{ needs.create-release.outputs.release_id }}
+          releaseId: ${{ needs.prepare.outputs.release_id }}
           args: ${{ matrix.args }}
+          releaseDraft: true
+          tauriScript: npm run tauri
 
-  publish-release:
-    permissions:
-      contents: write
-    runs-on: ubuntu-latest
-    needs: [create-release, build-tauri]
-
-    steps:
-      - name: publish release
-        id: publish-release
-        uses: actions/github-script@v7
-        env:
-          release_id: ${{ needs.create-release.outputs.release_id }}
-        with:
-          script: |
-            github.rest.repos.updateRelease({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              release_id: process.env.release_id,
-              draft: false,
-              prerelease: false
-            })
-
-      - name: Generate checksums
-        run: |
-          cd release-assets
-          sha256sum * > SHA256SUMS.txt
-
-      - name: Upload checksums
-        uses: actions/upload-release-asset@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          upload_url: ${{ steps.create-release.outputs.upload_url }}
-          asset_path: ./release-assets/SHA256SUMS.txt
-          asset_name: SHA256SUMS.txt
-          asset_content_type: text/plain
