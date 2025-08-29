@@ -60,7 +60,7 @@ jobs:
       - name: Commit and push changes
         run: |
           git add .
-          git commit -m "chore: bump version to ${{ env.NEW_VERSION }}"
-          git tag -a "v${{ env.NEW_VERSION }}" -m "Release v${{ env.NEW_VERSION }}"
+          git commit -m "chore: bump version to $NEW_VERSION"
+          git tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
           git push origin main
-          git push origin "v${{ env.NEW_VERSION }}"
+          git push origin "v$NEW_VERSION"

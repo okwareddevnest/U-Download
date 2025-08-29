@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import VideoPreview from "./VideoPreview";
 import "./App.css";
 
 function App() {
@@ -17,6 +18,12 @@ function App() {
     const saved = localStorage.getItem("isDarkMode");
     return saved ? JSON.parse(saved) : false;
   });
+
+  // Video trimming state
+  const [showVideoPreview, setShowVideoPreview] = useState(false);
+  const [trimStartTime, setTrimStartTime] = useState(null);
+  const [trimEndTime, setTrimEndTime] = useState(null);
+  const [isTrimMode, setIsTrimMode] = useState(false);
 
   useEffect(() => {
     localStorage.setItem("isDarkMode", JSON.stringify(isDarkMode));
@@ -94,6 +101,32 @@ function App() {
     }
   };
 
+  const handleTimeSelect = (action, time) => {
+    switch (action) {
+      case 'start':
+        setTrimStartTime(time);
+        break;
+      case 'end':
+        setTrimEndTime(time);
+        break;
+      case 'clear':
+        setTrimStartTime(null);
+        setTrimEndTime(null);
+        break;
+      default:
+        break;
+    }
+  };
+
+  const toggleTrimMode = () => {
+    if (!isValidYouTubeUrl(url)) {
+      alert("Please enter a valid YouTube URL first");
+      return;
+    }
+    setIsTrimMode(!isTrimMode);
+    setShowVideoPreview(!showVideoPreview);
+  };
+
   const startDownload = async () => {
     if (!isValidYouTubeUrl(url)) {
       alert("Please enter a valid YouTube URL");
@@ -102,6 +135,22 @@ function App() {
     if (!outputFolder) {
       alert("Please select an output folder");
       return;
+    }
+
+    // Check if FFmpeg is available when trimming is enabled
+    if (isTrimMode && (trimStartTime !== null || trimEndTime !== null)) {
+      try {
+        await invoke("check_ffmpeg");
+      } catch (error) {
+        alert(`FFmpeg is required for video trimming but is not installed.\n\nPlease install FFmpeg:\n• Ubuntu/Debian: sudo apt install ffmpeg\n• macOS: brew install ffmpeg\n• Windows: Download from ffmpeg.org\n\nError: ${error}`);
+        return;
+      }
+
+      // Validate trim times
+      if (trimStartTime !== null && trimEndTime !== null && trimStartTime >= trimEndTime) {
+        alert("Start time must be before end time");
+        return;
+      }
     }
 
     setStatus("downloading");
@@ -114,10 +163,25 @@ function App() {
         url,
         downloadType,
         quality,
-        outputFolder
+        outputFolder,
+        startTime: trimStartTime,
+        endTime: trimEndTime
       });
     } catch (error) {
       console.error("Download failed:", error);
+
+      // Provide more specific error messages for trimming operations
+      let errorMessage = "Download failed: " + error;
+
+      if (error.includes("FFmpeg")) {
+        errorMessage = "Trimming failed. Please ensure FFmpeg is properly installed.\n\nError: " + error;
+      } else if (error.includes("aria2c")) {
+        errorMessage = "Download accelerator failed. The download will continue without acceleration.\n\nError: " + error;
+      } else if (error.includes("yt-dlp")) {
+        errorMessage = "YouTube downloader failed. Please check your internet connection and try again.\n\nError: " + error;
+      }
+
+      alert(errorMessage);
       setStatus("error");
     }
   };
@@ -129,7 +193,17 @@ function App() {
   const testDependencies = async () => {
     try {
       const result = await invoke("test_dependencies");
-      alert(`Dependencies Check:\n\n${result}`);
+
+      // Also check FFmpeg
+      let ffmpegResult = "";
+      try {
+        const ffmpeg = await invoke("check_ffmpeg");
+        ffmpegResult = `\n\n${ffmpeg}`;
+      } catch (error) {
+        ffmpegResult = `\n\n❌ FFmpeg: Not found (${error})`;
+      }
+
+      alert(`Dependencies Check:\n\n${result}${ffmpegResult}`);
     } catch (error) {
       alert(`Dependencies Check Failed:\n\n${error}`);
     }
@@ -247,6 +321,52 @@ function App() {
                 <p>Please enter a valid YouTube URL</p>
               </div>
             )}
+          </div>
+
+          {/* Video Preview and Trimming */}
+          {isTrimMode && (
+            <div className="relative mb-8">
+              <VideoPreview
+                url={url}
+                onTimeSelect={handleTimeSelect}
+                isVisible={showVideoPreview}
+              />
+            </div>
+          )}
+
+          {/* Trim Mode Toggle */}
+          <div className="relative mb-8">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={toggleTrimMode}
+                  className={`px-6 py-3 rounded-xl font-semibold text-lg transition-all duration-300 transform hover:scale-105 ${
+                    isTrimMode
+                      ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg shadow-green-500/25'
+                      : 'bg-gradient-to-r from-gray-600 to-gray-700 text-white shadow-lg shadow-gray-600/25 hover:from-gray-700 hover:to-gray-800'
+                  }`}
+                >
+                  {isTrimMode ? '✂️ Exit Trim Mode' : '✂️ Trim Video'}
+                </button>
+
+                {isTrimMode && (trimStartTime !== null || trimEndTime !== null) && (
+                  <div className="flex items-center gap-2 bg-gray-700/50 px-4 py-2 rounded-lg">
+                    <span className="text-white text-sm">Trim:</span>
+                    {trimStartTime !== null && (
+                      <span className="text-green-400 text-sm">
+                        {Math.floor(trimStartTime / 60)}:{Math.floor(trimStartTime % 60).toString().padStart(2, '0')}
+                      </span>
+                    )}
+                    <span className="text-white text-sm">-</span>
+                    {trimEndTime !== null && (
+                      <span className="text-red-400 text-sm">
+                        {Math.floor(trimEndTime / 60)}:{Math.floor(trimEndTime % 60).toString().padStart(2, '0')}
+                      </span>
+                    )}
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
 
           {/* Download Options */}
@@ -434,12 +554,12 @@ function App() {
                 {status === "downloading" ? (
                   <>
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-current"></div>
-                    <span>Downloading...</span>
+                    <span>{isTrimMode ? 'Trimming & Downloading...' : 'Downloading...'}</span>
                   </>
                 ) : (
                   <>
-                    <span className="text-2xl">⬇️</span>
-                    <span>Start Download</span>
+                    <span className="text-2xl">{isTrimMode ? '✂️' : '⬇️'}</span>
+                    <span>{isTrimMode ? 'Trim & Download' : 'Start Download'}</span>
                   </>
                 )}
               </div>

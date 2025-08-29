@@ -12,7 +12,87 @@ struct DownloadProgress {
     status: String,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct VideoMetadata {
+    title: String,
+    duration: f64, // Duration in seconds
+    thumbnail_url: String,
+    uploader: String,
+    view_count: Option<u64>,
+    upload_date: Option<String>,
+}
+
 type ProgressState = Arc<Mutex<DownloadProgress>>;
+
+#[tauri::command]
+async fn get_video_metadata(url: String) -> Result<VideoMetadata, String> {
+    // Test if yt-dlp is available
+    match Command::new("yt-dlp").arg("--version").output() {
+        Ok(_) => {},
+        Err(e) => {
+            return Err(format!("yt-dlp not found: {}. Please install yt-dlp.", e));
+        }
+    }
+
+    // Get video information using yt-dlp --dump-json
+    let output = Command::new("yt-dlp")
+        .arg("--dump-json")
+        .arg("--no-download")
+        .arg(&url)
+        .output()
+        .map_err(|e| format!("Failed to get video info: {}", e))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(format!("Failed to get video metadata: {}", stderr));
+    }
+
+    let json_output = String::from_utf8_lossy(&output.stdout);
+    let metadata: serde_json::Value = serde_json::from_str(&json_output)
+        .map_err(|e| format!("Failed to parse video metadata: {}", e))?;
+
+    let title = metadata["title"].as_str()
+        .unwrap_or("Unknown Title")
+        .to_string();
+
+    let duration = metadata["duration"].as_f64()
+        .unwrap_or(0.0);
+
+    let thumbnail_url = metadata["thumbnail"].as_str()
+        .unwrap_or("")
+        .to_string();
+
+    let uploader = metadata["uploader"].as_str()
+        .unwrap_or("Unknown Uploader")
+        .to_string();
+
+    let view_count = metadata["view_count"].as_u64();
+
+    let upload_date = metadata["upload_date"].as_str()
+        .map(|s| s.to_string());
+
+    Ok(VideoMetadata {
+        title,
+        duration,
+        thumbnail_url,
+        uploader,
+        view_count,
+        upload_date,
+    })
+}
+
+#[tauri::command]
+async fn check_ffmpeg() -> Result<String, String> {
+    match Command::new("ffmpeg").arg("-version").output() {
+        Ok(output) => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            Ok(format!("✅ FFmpeg: {}", version.lines().next().unwrap_or("unknown")))
+        }
+        Err(e) => {
+            Err(format!("❌ FFmpeg: Not found ({}). Please install with: sudo apt install ffmpeg", e))
+        }
+    }
+}
 
 #[tauri::command]
 async fn select_output_folder(app_handle: AppHandle) -> Result<String, String> {
@@ -41,6 +121,8 @@ async fn start_download(
     downloadType: String,
     quality: String,
     outputFolder: String,
+    startTime: Option<f64>,
+    endTime: Option<f64>,
 ) -> Result<(), String> {
     let window_clone = window.clone();
     let progress_arc = progress_state.inner().clone();
@@ -48,6 +130,8 @@ async fn start_download(
     let download_type_clone = downloadType.clone();
     let quality_clone = quality.clone();
     let output_folder_clone = outputFolder.clone();
+    let start_time_clone = startTime;
+    let end_time_clone = endTime;
 
     tokio::spawn(async move {
         let result = perform_download(
@@ -57,6 +141,8 @@ async fn start_download(
             &download_type_clone,
             &quality_clone,
             &output_folder_clone,
+            start_time_clone,
+            end_time_clone,
         ).await;
 
         match result {
@@ -115,6 +201,8 @@ async fn perform_download(
     download_type: &str,
     quality: &str,
     output_folder: &str,
+    start_time: Option<f64>,
+    end_time: Option<f64>,
 ) -> Result<(), String> {
     // First, test if yt-dlp is available
     match Command::new("yt-dlp").arg("--version").output() {
@@ -138,6 +226,19 @@ async fn perform_download(
         }
     }
 
+    // Check if FFmpeg is available for trimming
+    let trimming_enabled = start_time.is_some() || end_time.is_some();
+    if trimming_enabled {
+        match Command::new("ffmpeg").arg("-version").output() {
+            Ok(_) => {
+                eprintln!("FFmpeg is available for trimming");
+            }
+            Err(e) => {
+                return Err(format!("FFmpeg not found or not executable: {}. Please install with: sudo apt install ffmpeg", e));
+            }
+        }
+    }
+
     let mut cmd = Command::new("yt-dlp");
 
     // Basic arguments for better quality and performance
@@ -149,9 +250,7 @@ async fn perform_download(
        .arg("--newline")
        .arg("--merge-output-format")
        .arg("mp4")
-       .arg("--prefer-free-formats")
-       .arg("-o")
-       .arg(format!("{}/%(title)s.%(ext)s", output_folder));
+       .arg("--prefer-free-formats");
 
     // Format selection based on type and quality
     match download_type {
@@ -176,6 +275,16 @@ async fn perform_download(
         }
         _ => return Err("Invalid download type".to_string()),
     }
+
+    // For trimming, we'll download the full video first, then trim with FFmpeg
+    // Set a temporary output pattern that we can identify later
+    let temp_output_pattern = if trimming_enabled {
+        format!("{}/%(title)s_temp.%(ext)s", output_folder)
+    } else {
+        format!("{}/%(title)s.%(ext)s", output_folder)
+    };
+
+    cmd.arg("-o").arg(&temp_output_pattern);
 
     cmd.arg(url);
 
@@ -233,8 +342,18 @@ async fn perform_download(
     };
 
     let output = child.wait().map_err(|e| format!("Process error: {}", e))?;
-    
+
     if output.success() {
+        // If trimming is enabled, perform FFmpeg trimming
+        if trimming_enabled {
+            perform_trimming(
+                window,
+                progress_state,
+                output_folder,
+                start_time,
+                end_time,
+            ).await?;
+        }
         Ok(())
     } else {
         let exit_code = output.code().unwrap_or(-1);
@@ -245,6 +364,97 @@ async fn perform_download(
         };
         eprintln!("Download failed: {}", error_msg);
         Err(error_msg)
+    }
+}
+
+async fn perform_trimming(
+    window: &Window,
+    progress_state: ProgressState,
+    output_folder: &str,
+    start_time: Option<f64>,
+    end_time: Option<f64>,
+) -> Result<(), String> {
+    use std::fs;
+    use std::path::Path;
+
+    // Find the downloaded file (it should have "_temp" in the name)
+    let folder_path = Path::new(output_folder);
+    let temp_files: Vec<_> = fs::read_dir(folder_path)
+        .map_err(|e| format!("Failed to read output directory: {}", e))?
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| {
+            entry.file_name()
+                .to_string_lossy()
+                .contains("_temp")
+        })
+        .collect();
+
+    if temp_files.is_empty() {
+        return Err("No temporary file found for trimming".to_string());
+    }
+
+    let temp_file = &temp_files[0];
+    let temp_path = temp_file.path();
+    let file_name_str = temp_file.file_name().to_string_lossy().to_string();
+
+    // Create the final output filename (remove "_temp")
+    let final_name = file_name_str.replace("_temp", "");
+    let final_path = folder_path.join(final_name);
+
+    let mut ffmpeg_cmd = Command::new("ffmpeg");
+
+    // Add input file
+    ffmpeg_cmd.arg("-i").arg(&temp_path);
+
+    // Add trimming parameters
+    if let Some(start) = start_time {
+        ffmpeg_cmd.arg("-ss").arg(format!("{}", start));
+    }
+
+    if let Some(end) = end_time {
+        ffmpeg_cmd.arg("-t").arg(format!("{}", end - start_time.unwrap_or(0.0)));
+    }
+
+    // Copy codecs and avoid re-encoding for speed
+    ffmpeg_cmd.arg("-c").arg("copy");
+
+    // Set output file
+    ffmpeg_cmd.arg(&final_path);
+
+    // Hide FFmpeg output for cleaner logs
+    ffmpeg_cmd.arg("-hide_banner").arg("-loglevel").arg("error");
+
+    eprintln!("Executing FFmpeg trimming: {:?}", ffmpeg_cmd);
+
+    {
+        let mut progress = progress_state.lock().unwrap();
+        progress.status = "trimming".to_string();
+        progress.percentage = 0.0;
+        let progress_copy = progress.clone();
+        let _ = window.emit("download-progress", progress_copy);
+    }
+
+    let ffmpeg_output = ffmpeg_cmd.output()
+        .map_err(|e| format!("Failed to run FFmpeg: {}", e))?;
+
+    if ffmpeg_output.status.success() {
+        // Remove the temporary file
+        if let Err(e) = fs::remove_file(&temp_path) {
+            eprintln!("Warning: Failed to remove temporary file: {}", e);
+        }
+
+        {
+            let mut progress = progress_state.lock().unwrap();
+            progress.status = "completed".to_string();
+            progress.percentage = 100.0;
+            let progress_copy = progress.clone();
+            let _ = window.emit("download-progress", progress_copy);
+        }
+
+        Ok(())
+    } else {
+        let stderr = String::from_utf8_lossy(&ffmpeg_output.stderr);
+        Err(format!("FFmpeg trimming failed: {}", stderr))
     }
 }
 
@@ -262,7 +472,13 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
         .manage(progress_state)
-        .invoke_handler(tauri::generate_handler![select_output_folder, start_download, test_dependencies])
+        .invoke_handler(tauri::generate_handler![
+            select_output_folder,
+            start_download,
+            test_dependencies,
+            get_video_metadata,
+            check_ffmpeg
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

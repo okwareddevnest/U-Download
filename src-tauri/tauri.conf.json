@@ -7,7 +7,8 @@
     "beforeDevCommand": "npm run dev",
     "devUrl": "http://localhost:1420",
     "beforeBuildCommand": "npm run build",
-    "frontendDist": "../dist"
+    "frontendDist": "../dist",
+    "beforeBundleCommand": null
   },
   "app": {
     "windows": [
@@ -30,7 +31,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": "all",
+    "targets": ["deb", "rpm"],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
@@ -44,7 +45,7 @@
     "resources": [],
     "externalBin": [],
     "copyright": "Copyright © 2025 U-Download. All rights reserved.",
-    "category": "AudioVideo",
+    "category": "Utility",
     "shortDescription": "Fast YouTube downloader",
     "longDescription": "U-Download is a beautiful, cross-platform YouTube downloader powered by yt-dlp and aria2c for maximum download speed and reliability.",
     "macOS": {
