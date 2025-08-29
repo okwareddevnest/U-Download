@@ -1,7 +1,7 @@
 {
   "name": "u-download",
   "private": true,
-  "version": "0.1.0",
+  "version": "1.0.0",
   "type": "module",
   "description": "Fast, cross-platform YouTube downloader with GUI",
   "author": "Dedan Okware <softengde@gmail.com>",
@@ -14,7 +14,14 @@
   "bugs": {
     "url": "https://github.com/okwareddevnet/u-download/issues"
   },
-  "keywords": ["youtube", "downloader", "desktop", "tauri", "rust", "react"],
+  "keywords": [
+    "youtube",
+    "downloader",
+    "desktop",
+    "tauri",
+    "rust",
+    "react"
+  ],
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -23,11 +30,11 @@
     "tauri": "tauri",
     "tauri:build": "tauri build",
     "tauri:dev": "tauri dev",
-    "version:patch": "./scripts/version-sync.sh $(npm version patch --no-git-tag-version | sed 's/^v//')",
-    "version:minor": "./scripts/version-sync.sh $(npm version minor --no-git-tag-version | sed 's/^v//')",
-    "version:major": "./scripts/version-sync.sh $(npm version major --no-git-tag-version | sed 's/^v//')",
+    "version:patch": "./scripts/version-sync.sh $(node -e \"let v=require('./package.json').version.split('-')[0].split('.'); v[2]=(+(v[2]||0))+1; console.log([v[0],v[1],v[2]].join('.'))\")",
+    "version:minor": "./scripts/version-sync.sh $(node -e \"let v=require('./package.json').version.split('-')[0].split('.'); v[1]=(+(v[1]||0))+1; v[2]=0; console.log([v[0],v[1],v[2]].join('.'))\")",
+    "version:major": "./scripts/version-sync.sh $(node -e \"let v=require('./package.json').version.split('-')[0].split('.'); v[0]=(+(v[0]||0))+1; v[1]=0; v[2]=0; console.log([v[0],v[1],v[2]].join('.'))\")",
     "release:patch": "npm run version:patch && V=$(node -p \"require('./package.json').version\") && git add . && git commit -m \"chore: release v$V\" && git tag -a v$V -m \"Release v$V\" && git push origin HEAD && git push origin v$V",
-    "release:minor": "npm run version:minor && V=$(node -p \"require('./package.json').version\") && git add . && git commit -m \"chore: release v$V\" && git tag -a v$V -m \"Release v$V\" && git push origin HEAD && git push origin v$V", 
+    "release:minor": "npm run version:minor && V=$(node -p \"require('./package.json').version\") && git add . && git commit -m \"chore: release v$V\" && git tag -a v$V -m \"Release v$V\" && git push origin HEAD && git push origin v$V",
     "release:major": "npm run version:major && V=$(node -p \"require('./package.json').version\") && git add . && git commit -m \"chore: release v$V\" && git tag -a v$V -m \"Release v$V\" && git push origin HEAD && git push origin v$V"
   },
   "dependencies": {
