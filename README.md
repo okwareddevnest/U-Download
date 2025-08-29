@@ -22,12 +22,18 @@ Note: binaries aren’t codesigned. On macOS, allow the app in System Settings �
 
 ## Features
 
-- High‑speed downloads via `yt-dlp` + `aria2c`
-- Live progress with speed and ETA
-- MP4 (video) and MP3 (audio)
-- Quality presets: 360p / 480p / 720p / 1080p / best
-- Trim video to the second (slider + manual inputs)
-- Dark/Light theme and settings persistence
+- Fast downloads: `yt-dlp` + `aria2c` for multi‑connection speed
+- Reliable: progress bar, current speed and ETA; clear errors on failure
+- Video or audio: MP4 or MP3 with sensible defaults
+- Quality presets: 360p / 480p / 720p / 1080p / Best
+- Precise trimming:
+  - Per‑second slider control
+  - Manual time inputs (SS, MM:SS, or HH:MM:SS)
+  - Uses FFmpeg when trimming is enabled
+- Clean UI: dark/light theme, smooth animations, URL validation
+- Folder control: choose any output folder; settings persist between runs
+- Dependency check: quick test for yt‑dlp, aria2c, and FFmpeg
+- Cross‑platform installers: Linux (.AppImage, .deb, .rpm), Windows (.exe), macOS (.dmg)
 
 ## Requirements
 
@@ -60,7 +66,3 @@ Quick install:
 ## License
 
 MIT
-
-—
-
-Made with ❤️ using React, Tailwind CSS, and Tauri
