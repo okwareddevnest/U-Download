@@ -25,11 +25,16 @@ fi
 
 echo "Updating version to $NEW_VERSION..."
 
-# Update package.json
+# Update package.json (skip if already at target version)
 if command -v npm >/dev/null 2>&1; then
     cd "$ROOT_DIR"
-    npm version "$NEW_VERSION" --no-git-tag-version
-    echo "✓ Updated package.json"
+    CUR_VER=$(node -p "require('./package.json').version" 2>/dev/null || echo "")
+    if [ "$CUR_VER" = "$NEW_VERSION" ]; then
+        echo "✓ package.json already at $NEW_VERSION"
+    else
+        npm version "$NEW_VERSION" --no-git-tag-version
+        echo "✓ Updated package.json"
+    fi
 else
     echo "Warning: npm not found, skipping package.json update"
 fi
@@ -37,8 +42,8 @@ fi
 # Update Cargo.toml
 CARGO_TOML="$ROOT_DIR/src-tauri/Cargo.toml"
 if [ -f "$CARGO_TOML" ]; then
-    if command -v cargo >/dev/null 2>&1; then
-        cd "$ROOT_DIR/src-tauri"
+    cd "$ROOT_DIR/src-tauri"
+    if command -v cargo >/dev/null 2>&1 && cargo --list 2>/dev/null | grep -q "set-version"; then
         cargo set-version "$NEW_VERSION"
         echo "✓ Updated Cargo.toml"
     else
