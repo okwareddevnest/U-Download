@@ -25,6 +25,18 @@ fi
 
 echo "Updating version to $NEW_VERSION..."
 
+# Ensure we don't repeat a version that already has a tag
+cd "$ROOT_DIR"
+git fetch --tags --force --prune >/dev/null 2>&1 || true
+if git tag -l | grep -qx "v$NEW_VERSION"; then
+    echo "Error: tag v$NEW_VERSION already exists locally. Choose a new version."
+    exit 1
+fi
+if git ls-remote --tags origin "v$NEW_VERSION" | grep -q "refs/tags/v$NEW_VERSION$"; then
+    echo "Error: tag v$NEW_VERSION already exists on origin. Choose a new version."
+    exit 1
+fi
+
 # Update package.json (skip if already at target version)
 if command -v npm >/dev/null 2>&1; then
     cd "$ROOT_DIR"

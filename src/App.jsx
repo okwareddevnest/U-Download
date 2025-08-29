@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VideoPreview from "./VideoPreview";
@@ -18,6 +19,7 @@ function App() {
     const saved = localStorage.getItem("isDarkMode");
     return saved ? JSON.parse(saved) : false;
   });
+  const [appVersion, setAppVersion] = useState("");
 
   // Video trimming state
   const [showVideoPreview, setShowVideoPreview] = useState(false);
@@ -28,6 +30,26 @@ function App() {
   useEffect(() => {
     localStorage.setItem("isDarkMode", JSON.stringify(isDarkMode));
   }, [isDarkMode]);
+
+  // Load app version from Tauri (fallback to dev if unavailable)
+  useEffect(() => {
+    (async () => {
+      try {
+        const v = await getVersion();
+        setAppVersion(v);
+      } catch (e) {
+        // Fallback for non-tauri contexts
+        try {
+          // Optional: embed package.json version via Vite define if present
+          // eslint-disable-next-line no-undef
+          const envVersion = import.meta?.env?.VITE_APP_VERSION;
+          setAppVersion(envVersion || "dev");
+        } catch (_) {
+          setAppVersion("dev");
+        }
+      }
+    })();
+  }, []);
 
   useEffect(() => {
     const savedFolder = localStorage.getItem("outputFolder");
@@ -265,7 +287,7 @@ function App() {
                 ? 'bg-green-900/30 text-green-400 border border-green-400/30' 
                 : 'bg-green-100 text-green-700 border border-green-200'
             }`}>
-              v 0.1.0
+              v {appVersion || 'dev'}
             </div>
             <button
               onClick={toggleTheme}
