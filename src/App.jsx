@@ -232,9 +232,9 @@ function App() {
   };
 
   return (
-    <div className={`min-h-screen transition-all duration-500 ${
+    <div data-theme={isDarkMode ? 'dark' : 'light'} className={`min-h-screen transition-all duration-500 ${
       isDarkMode 
-        ? 'bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
+        ? 'theme-dark bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900' 
         : 'bg-gradient-to-br from-blue-50 via-white to-purple-50'
     }`}>
       <div className="container mx-auto px-6 py-8 max-w-5xl">
@@ -403,7 +403,7 @@ function App() {
                 <select
                   value={downloadType}
                   onChange={(e) => setDownloadType(e.target.value)}
-                  className={`w-full px-4 py-4 rounded-2xl border-2 focus:outline-none transition-all duration-300 text-lg cursor-pointer ${
+                  className={`w-full px-4 py-4 pr-10 rounded-2xl border-2 focus:outline-none transition-all duration-300 text-lg cursor-pointer appearance-none ${
                     isDarkMode 
                       ? 'bg-gray-700/50 border-gray-600/50 text-white focus:border-blue-500/50 focus:bg-gray-700' 
                       : 'bg-white/50 border-gray-300/50 text-gray-900 focus:border-blue-500/50 focus:bg-white'
@@ -430,7 +430,7 @@ function App() {
                 <select
                   value={quality}
                   onChange={(e) => setQuality(e.target.value)}
-                  className={`w-full px-4 py-4 rounded-2xl border-2 focus:outline-none transition-all duration-300 text-lg cursor-pointer ${
+                  className={`w-full px-4 py-4 pr-10 rounded-2xl border-2 focus:outline-none transition-all duration-300 text-lg cursor-pointer appearance-none ${
                     isDarkMode 
                       ? 'bg-gray-700/50 border-gray-600/50 text-white focus:border-green-500/50 focus:bg-gray-700' 
                       : 'bg-white/50 border-gray-300/50 text-gray-900 focus:border-green-500/50 focus:bg-white'

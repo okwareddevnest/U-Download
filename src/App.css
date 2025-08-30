@@ -57,3 +57,28 @@ body {
   position: relative;
   display: inline-block;
 }
+
+/*
+  Dark theme form-control fixes
+  - Ensures native selects/inputs render with correct contrast in dark mode
+  - address: https://github.com/okwareddevnest/U-Download/issues/1
+*/
+.theme-dark select,
+.theme-dark input[type="text"],
+.theme-dark input[type="url"],
+.theme-dark textarea {
+  color-scheme: dark; /* let the UA draw native controls for dark */
+  color: #ffffff;
+}
+
+/* Provide sensible backgrounds/borders when appearance is disabled */
+.theme-dark select,
+.theme-dark input[type="text"],
+.theme-dark input[type="url"],
+.theme-dark textarea {
+  background-color: rgba(55, 65, 81, 0.5); /* gray-700/50 */
+  border-color: rgba(75, 85, 99, 0.5);     /* gray-600/50 */
+}
+
+/* Dropdown list color hint (supported browsers only) */
+.theme-dark option { color: #ffffff; background-color: #1f2937; }

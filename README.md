@@ -6,8 +6,8 @@ Fast, cross‑platform YouTube downloader with a modern UI. Powered by `yt-dlp` 
 
 - Latest release (always up to date):
   - https://github.com/okwareddevnet/u-download/releases/latest
-- Current version: v2.0.1
-  - https://github.com/okwareddevnet/u-download/releases/tag/v2.0.1
+- Current version: v2.0.2
+  - https://github.com/okwareddevnet/u-download/releases/tag/v2.0.2
 
 Pick the installer for your OS from the “Assets” section of the release:
 
