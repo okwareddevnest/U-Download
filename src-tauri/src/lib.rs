@@ -7,7 +7,7 @@ use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_dialog::DialogExt;
-use notify_rust::{Notification, Urgency};
+use notify_rust::Notification;
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct DownloadProgress {
@@ -146,12 +146,11 @@ fn calculate_eta(bytes_downloaded: u64, total_bytes: u64, speed_bytes_per_sec: u
     }
 }
 
-fn send_notification(title: &str, body: &str, urgency: Urgency) -> Result<(), String> {
+fn send_notification(title: &str, body: &str) -> Result<(), String> {
     Notification::new()
         .summary(title)
         .body(body)
         .icon("u-download") // Will fallback to default if icon not found
-        .urgency(urgency)
         .timeout(0) // Use system default timeout
         .show()
         .map_err(|e| format!("Failed to show notification: {}", e))?;
@@ -163,7 +162,6 @@ fn send_download_complete_notification(filename: &str) -> Result<(), String> {
     send_notification(
         "Download Complete! 🎉",
         &format!("Successfully downloaded: {}", filename),
-        Urgency::Normal,
     )
 }
 
@@ -171,7 +169,6 @@ fn send_download_error_notification(error: &str) -> Result<(), String> {
     send_notification(
         "Download Failed ❌",
         &format!("Download error: {}", error),
-        Urgency::Critical,
     )
 }
 
@@ -179,7 +176,6 @@ fn send_download_started_notification(filename: &str) -> Result<(), String> {
     send_notification(
         "Download Started 🚀",
         &format!("Started downloading: {}", filename),
-        Urgency::Low,
     )
 }
 
@@ -539,7 +535,6 @@ async fn perform_download(
                         // Update ETA
                         let remaining_percentage = 100.0 - progress.percentage;
                         if remaining_percentage > 0.0 && estimated_speed > 0 {
-                            let remaining_bytes = ((remaining_percentage / 100.0) * estimated_total_bytes as f64) as u64;
                             progress.eta = calculate_eta(progress.bytes_downloaded, progress.total_bytes, estimated_speed);
                         }
                     }
