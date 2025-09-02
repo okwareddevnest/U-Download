@@ -7,13 +7,18 @@ use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_dialog::DialogExt;
+use notify_rust::{Notification, Urgency};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct DownloadProgress {
     percentage: f64,
     speed: String,
+    speed_bytes_per_sec: u64,
     eta: String,
     status: String,
+    bytes_downloaded: u64,
+    total_bytes: u64,
+    download_start_time: std::time::SystemTime,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
@@ -27,6 +32,156 @@ struct VideoMetadata {
 }
 
 type ProgressState = Arc<Mutex<DownloadProgress>>;
+
+fn format_speed(bytes_per_sec: u64) -> String {
+    if bytes_per_sec == 0 {
+        return "Calculating...".to_string();
+    }
+    
+    if bytes_per_sec < 10 {
+        return "Starting...".to_string();
+    }
+    
+    const UNITS: &[&str] = &["B/s", "kB/s", "MB/s", "GB/s"];
+    let mut speed = bytes_per_sec as f64;
+    let mut unit_index = 0;
+    
+    while speed >= 1024.0 && unit_index < UNITS.len() - 1 {
+        speed /= 1024.0;
+        unit_index += 1;
+    }
+    
+    let formatted = if speed >= 100.0 {
+        format!("{:.0}", speed)
+    } else if speed >= 10.0 {
+        format!("{:.1}", speed)
+    } else if speed >= 1.0 {
+        format!("{:.2}", speed)
+    } else {
+        format!("{:.3}", speed)
+    };
+    
+    format!("{} {}", formatted, UNITS[unit_index])
+}
+
+fn parse_bytes_from_yt_dlp_size(size_str: &str) -> u64 {
+    let size_str = size_str.trim().replace(",", ""); // Remove commas
+    eprintln!("Parsing size string: '{}'", size_str);
+    
+    // Handle "Unknown" or empty strings
+    if size_str.is_empty() || size_str.to_lowercase() == "unknown" {
+        return 0;
+    }
+    
+    // Find the position where unit starts (first alphabetic character)
+    let (number_part, unit_part) = if let Some(pos) = size_str.find(char::is_alphabetic) {
+        (&size_str[..pos], &size_str[pos..])
+    } else {
+        (size_str.as_str(), "")
+    };
+    
+    let number: f64 = number_part.parse().unwrap_or_else(|_| {
+        eprintln!("Failed to parse number: '{}'", number_part);
+        0.0
+    });
+    
+    let multiplier = match unit_part.to_uppercase().as_str() {
+        "B" | "BYTES" => 1.0,
+        "K" | "KB" | "KIB" => 1024.0,
+        "M" | "MB" | "MIB" | "MBYTES" => 1024.0 * 1024.0,
+        "G" | "GB" | "GIB" | "GBYTES" => 1024.0 * 1024.0 * 1024.0,
+        "T" | "TB" | "TIB" | "TBYTES" => 1024.0 * 1024.0 * 1024.0 * 1024.0,
+        // Handle speed units (remove /s)
+        "KB/S" | "KIB/S" => 1024.0,
+        "MB/S" | "MIB/S" => 1024.0 * 1024.0,
+        "GB/S" | "GIB/S" => 1024.0 * 1024.0 * 1024.0,
+        "" => 1.0, // assume bytes if no unit
+        _ => {
+            eprintln!("Unknown unit: '{}', assuming bytes", unit_part);
+            1.0
+        }
+    };
+    
+    let result = (number * multiplier) as u64;
+    eprintln!("Parsed '{}' as {} bytes", size_str, result);
+    result
+}
+
+fn calculate_eta(bytes_downloaded: u64, total_bytes: u64, speed_bytes_per_sec: u64) -> String {
+    if speed_bytes_per_sec == 0 {
+        return "Calculating...".to_string();
+    }
+    
+    if total_bytes == 0 || bytes_downloaded >= total_bytes {
+        return "Complete".to_string();
+    }
+    
+    if speed_bytes_per_sec < 10 {
+        return "Starting...".to_string();
+    }
+    
+    let remaining_bytes = total_bytes.saturating_sub(bytes_downloaded);
+    if remaining_bytes == 0 {
+        return "Complete".to_string();
+    }
+    
+    let eta_seconds = remaining_bytes / speed_bytes_per_sec;
+    
+    // Handle very long ETAs (more than 24 hours)
+    if eta_seconds > 86400 {
+        let days = eta_seconds / 86400;
+        return format!("{}d+", days);
+    }
+    
+    let hours = eta_seconds / 3600;
+    let minutes = (eta_seconds % 3600) / 60;
+    let seconds = eta_seconds % 60;
+    
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, minutes, seconds)
+    } else if minutes > 0 {
+        format!("{}:{:02}", minutes, seconds)
+    } else {
+        format!("{}s", seconds.max(1))
+    }
+}
+
+fn send_notification(title: &str, body: &str, urgency: Urgency) -> Result<(), String> {
+    Notification::new()
+        .summary(title)
+        .body(body)
+        .icon("u-download") // Will fallback to default if icon not found
+        .urgency(urgency)
+        .timeout(0) // Use system default timeout
+        .show()
+        .map_err(|e| format!("Failed to show notification: {}", e))?;
+    
+    Ok(())
+}
+
+fn send_download_complete_notification(filename: &str) -> Result<(), String> {
+    send_notification(
+        "Download Complete! 🎉",
+        &format!("Successfully downloaded: {}", filename),
+        Urgency::Normal,
+    )
+}
+
+fn send_download_error_notification(error: &str) -> Result<(), String> {
+    send_notification(
+        "Download Failed ❌",
+        &format!("Download error: {}", error),
+        Urgency::Critical,
+    )
+}
+
+fn send_download_started_notification(filename: &str) -> Result<(), String> {
+    send_notification(
+        "Download Started 🚀",
+        &format!("Started downloading: {}", filename),
+        Urgency::Low,
+    )
+}
 
 #[tauri::command]
 async fn get_video_metadata(url: String) -> Result<VideoMetadata, String> {
@@ -153,17 +308,24 @@ async fn start_download(
         .await;
 
         match result {
-            Ok(_) => {
+            Ok(filename) => {
                 let mut progress = progress_arc.lock().unwrap();
                 progress.status = "completed".to_string();
                 progress.percentage = 100.0;
                 let progress_copy = progress.clone();
                 let _ = window_clone.emit("download-progress", progress_copy);
+                
+                // Send completion notification
+                let _ = send_download_complete_notification(&filename);
+                let _ = window_clone.emit("download-complete", filename);
             }
             Err(e) => {
                 let mut progress = progress_arc.lock().unwrap();
                 progress.status = "error".to_string();
                 eprintln!("Download error: {}", e);
+                
+                // Send error notification
+                let _ = send_download_error_notification(&e);
                 let _ = window_clone.emit("download-error", format!("Download failed: {}", e));
             }
         }
@@ -213,7 +375,7 @@ async fn perform_download(
     output_folder: &str,
     start_time: Option<f64>,
     end_time: Option<f64>,
-) -> Result<(), String> {
+) -> Result<String, String> {
     // First, test if yt-dlp is available
     match Command::new("yt-dlp").arg("--version").output() {
         Ok(output) => {
@@ -315,27 +477,201 @@ async fn perform_download(
             )
         })?;
 
-    // Monitor the process output
+    // Get video title for notification
+    let video_title = match get_video_metadata(url.to_string()).await {
+        Ok(metadata) => metadata.title,
+        Err(_) => "Unknown Video".to_string(),
+    };
+
+    // Send download start notification
+    let _ = send_download_started_notification(&video_title);
+
+    // Initialize download start time and periodic update task
+    {
+        let mut progress = progress_state.lock().unwrap();
+        progress.download_start_time = std::time::SystemTime::now();
+        progress.status = "downloading".to_string();
+        progress.percentage = 0.0;
+        progress.bytes_downloaded = 0;
+        progress.total_bytes = 0;
+    }
+
+    // Start periodic progress update task
+    let periodic_progress_state = progress_state.clone();
+    let periodic_window = window.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(2));
+        let mut last_percentage = 0.0;
+        let mut last_update_time = std::time::SystemTime::now();
+        
+        loop {
+            interval.tick().await;
+            
+            let now = std::time::SystemTime::now();
+            let should_update = {
+                let mut progress = periodic_progress_state.lock().unwrap();
+                
+                if progress.status != "downloading" {
+                    break; // Exit if download is no longer active
+                }
+                
+                let elapsed_since_last = now.duration_since(last_update_time).unwrap_or_default();
+                
+                // Calculate speed based on percentage change if no real speed data
+                if progress.speed_bytes_per_sec == 0 && progress.percentage > last_percentage {
+                    let percentage_change = progress.percentage - last_percentage;
+                    let elapsed_secs = elapsed_since_last.as_secs_f64().max(0.1);
+                    
+                    if percentage_change > 0.0 {
+                        // Estimate speed based on percentage progress over time
+                        let estimated_total_bytes = if progress.total_bytes > 0 {
+                            progress.total_bytes
+                        } else {
+                            100_000_000 // 100MB default estimate
+                        };
+                        
+                        let bytes_for_percentage = ((percentage_change / 100.0) * estimated_total_bytes as f64) as u64;
+                        let estimated_speed = (bytes_for_percentage as f64 / elapsed_secs) as u64;
+                        
+                        progress.speed_bytes_per_sec = estimated_speed;
+                        progress.speed = format_speed(estimated_speed);
+                        
+                        // Update ETA
+                        let remaining_percentage = 100.0 - progress.percentage;
+                        if remaining_percentage > 0.0 && estimated_speed > 0 {
+                            let remaining_bytes = ((remaining_percentage / 100.0) * estimated_total_bytes as f64) as u64;
+                            progress.eta = calculate_eta(progress.bytes_downloaded, progress.total_bytes, estimated_speed);
+                        }
+                    }
+                }
+                
+                last_percentage = progress.percentage;
+                last_update_time = now;
+                
+                progress.clone()
+            };
+            
+            // Send periodic update to frontend
+            let _ = periodic_window.emit("download-progress", should_update);
+        }
+    });
+
+    // Monitor the process output with comprehensive parsing
     if let Some(stdout) = child.stdout.take() {
         use std::io::{BufRead, BufReader};
         let reader = BufReader::new(stdout);
 
-        let progress_regex =
-            Regex::new(r"\[download\]\s+(\d+\.?\d*)%.*?(\S+/s).*?ETA\s+(\S+)").unwrap();
+        // Regex patterns for different output formats
+        let dl_status_regex = Regex::new(r"\[DL:([\d.]+)([GMK]?)iB\]").unwrap(); // aria2c download status
+        let fragment_regex = Regex::new(r"\[hlsnative\]\s+Total fragments:\s+(\d+)").unwrap(); // HLS fragment count
+        let standard_progress_patterns = vec![
+            // Standard yt-dlp progress patterns
+            Regex::new(r"\[download\]\s+(\d+\.?\d*)%\s+of\s+(\S+)\s+at\s+(\S+/s)\s+ETA\s+(\S+)").unwrap(),
+            Regex::new(r"\[download\]\s+(\d+\.?\d*)%\s+of\s+(\S+)\s+at\s+(\S+/s).*?ETA\s+(\S+)").unwrap(),
+            Regex::new(r"\[download\]\s+(\d+\.?\d*)%.*?at\s+(\S+/s).*?ETA\s+(\S+)").unwrap(),
+            Regex::new(r"\[download\]\s+(\d+\.?\d*)%.*?at\s+(\S+/s)").unwrap(),
+            Regex::new(r"\[download\]\s+(\d+\.?\d*)%\s+of\s+(\S+)").unwrap(),
+            Regex::new(r"\[download\]\s+(\d+\.?\d*)%").unwrap(),
+        ];
+
+        let mut total_fragments = 0u32;
+        let mut current_fragments = 0u32;
+        let mut last_dl_size = 0u64;
+        let mut accumulated_size = 0u64;
 
         for line in reader.lines() {
             if let Ok(line) = line {
-                if let Some(captures) = progress_regex.captures(&line) {
-                    let percentage: f64 = captures.get(1).unwrap().as_str().parse().unwrap_or(0.0);
-                    let speed = captures.get(2).unwrap().as_str().to_string();
-                    let eta = captures.get(3).unwrap().as_str().to_string();
+                eprintln!("yt-dlp output: {}", line);
+                let now = std::time::SystemTime::now();
+                let mut progress_updated = false;
 
+                // 1. Check for total fragments count (HLS streams)
+                if let Some(captures) = fragment_regex.captures(&line) {
+                    if let Ok(fragments) = captures.get(1).unwrap().as_str().parse::<u32>() {
+                        total_fragments = fragments;
+                        eprintln!("Found total fragments: {}", total_fragments);
+                    }
+                }
+
+                // 2. Parse aria2c download status lines: [DL:4.1MiB][#hash size/totalsize][...]
+                if let Some(captures) = dl_status_regex.captures(&line) {
+                    let size_num: f64 = captures.get(1).unwrap().as_str().parse().unwrap_or(0.0);
+                    let size_unit = captures.get(2).map(|m| m.as_str()).unwrap_or("");
+                    
+                    // Convert to bytes
+                    let current_size = match size_unit {
+                        "G" => (size_num * 1024.0 * 1024.0 * 1024.0) as u64,
+                        "M" => (size_num * 1024.0 * 1024.0) as u64,
+                        "K" => (size_num * 1024.0) as u64,
+                        _ => size_num as u64,
+                    };
+
+                    eprintln!("aria2c DL status: {} {} = {} bytes", size_num, size_unit, current_size);
+                    
+                    // Update accumulated size
+                    if current_size > last_dl_size {
+                        accumulated_size += current_size - last_dl_size;
+                    } else {
+                        accumulated_size += current_size; // New fragment started
+                    }
+                    last_dl_size = current_size;
+
+                    // Calculate progress based on fragments if we know the total
+                    let (percentage, estimated_speed) = if total_fragments > 0 {
+                        // Count completed fragments by counting how many times we see repeated sizes
+                        current_fragments += 1;
+                        let progress = (current_fragments as f64 / total_fragments as f64) * 100.0;
+                        
+                        // Calculate speed based on accumulated data
+                        let elapsed = now.duration_since({
+                            let progress = progress_state.lock().unwrap();
+                            progress.download_start_time
+                        }).unwrap_or_default();
+                        let elapsed_secs = elapsed.as_secs_f64().max(0.1);
+                        let speed = (accumulated_size as f64 / elapsed_secs) as u64;
+                        
+                        (progress.min(100.0), speed)
+                    } else {
+                        // Estimate progress based on download size (rough estimation)
+                        // Assume an average video is around 100MB to 1GB
+                        let estimated_total = 500_000_000u64; // 500MB estimate
+                        let progress = ((accumulated_size as f64 / estimated_total as f64) * 100.0).min(95.0);
+                        
+                        let elapsed = now.duration_since({
+                            let progress = progress_state.lock().unwrap();
+                            progress.download_start_time
+                        }).unwrap_or_default();
+                        let elapsed_secs = elapsed.as_secs_f64().max(0.1);
+                        let speed = (accumulated_size as f64 / elapsed_secs) as u64;
+                        
+                        (progress, speed)
+                    };
+
+                    // Update progress state
                     {
                         let mut progress = progress_state.lock().unwrap();
                         progress.percentage = percentage;
-                        progress.speed = speed;
-                        progress.eta = eta;
+                        progress.bytes_downloaded = accumulated_size;
+                        
+                        if total_fragments > 0 {
+                            // For HLS streams, estimate total size based on average fragment size
+                            let avg_fragment_size = if current_fragments > 0 {
+                                accumulated_size / current_fragments as u64
+                            } else {
+                                current_size
+                            };
+                            progress.total_bytes = avg_fragment_size * total_fragments as u64;
+                        } else {
+                            progress.total_bytes = (accumulated_size as f64 / (percentage / 100.0).max(0.01)) as u64;
+                        }
+                        
+                        progress.speed_bytes_per_sec = estimated_speed;
+                        progress.speed = format_speed(estimated_speed);
+                        progress.eta = calculate_eta(accumulated_size, progress.total_bytes, estimated_speed);
                         progress.status = "downloading".to_string();
+                        
+                        eprintln!("aria2c Progress: {:.1}% | {} | bytes: {} | fragments: {}/{}", 
+                                 percentage, progress.speed, accumulated_size, current_fragments, total_fragments);
                     }
 
                     let progress_copy = {
@@ -344,6 +680,115 @@ async fn perform_download(
                     };
 
                     let _ = window.emit("download-progress", progress_copy);
+                    progress_updated = true;
+                }
+
+                // 3. Try standard yt-dlp progress patterns as fallback
+                if !progress_updated {
+                    for (pattern_index, pattern) in standard_progress_patterns.iter().enumerate() {
+                        if let Some(captures) = pattern.captures(&line) {
+                            eprintln!("Matched standard pattern {}: {:?}", pattern_index, captures);
+                            
+                            let percentage: f64 = captures.get(1)
+                                .and_then(|m| m.as_str().parse().ok())
+                                .unwrap_or(0.0);
+                            
+                            let total_size_str = match pattern_index {
+                                0 | 1 | 4 => captures.get(2).map(|m| m.as_str()),
+                                _ => None,
+                            };
+                            
+                            let speed_str = match pattern_index {
+                                0 | 1 => captures.get(3).map(|m| m.as_str()),
+                                2 | 3 => captures.get(2).map(|m| m.as_str()),
+                                _ => None,
+                            };
+                            
+                            let eta_str = match pattern_index {
+                                0 | 1 => captures.get(4).map(|m| m.as_str()),
+                                2 => captures.get(3).map(|m| m.as_str()),
+                                _ => None,
+                            };
+
+                            let total_bytes = total_size_str
+                                .map(|s| parse_bytes_from_yt_dlp_size(s))
+                                .unwrap_or(0);
+                            
+                            let bytes_downloaded = if total_bytes > 0 {
+                                ((percentage / 100.0) * total_bytes as f64) as u64
+                            } else {
+                                0
+                            };
+                            
+                            let parsed_speed_bytes = speed_str
+                                .map(|s| parse_bytes_from_yt_dlp_size(&s.replace("/s", "")))
+                                .unwrap_or(0);
+
+                            {
+                                let mut progress = progress_state.lock().unwrap();
+                                progress.percentage = percentage;
+                                
+                                if total_bytes > 0 {
+                                    progress.bytes_downloaded = bytes_downloaded;
+                                    progress.total_bytes = total_bytes;
+                                }
+                                
+                                if parsed_speed_bytes > 0 {
+                                    progress.speed_bytes_per_sec = parsed_speed_bytes;
+                                    progress.speed = format_speed(parsed_speed_bytes);
+                                }
+                                
+                                progress.eta = eta_str.map(|s| s.to_string())
+                                    .unwrap_or_else(|| calculate_eta(bytes_downloaded, total_bytes, progress.speed_bytes_per_sec));
+                                
+                                progress.status = "downloading".to_string();
+                                
+                                eprintln!("Standard progress: {}% | {} | ETA: {}", 
+                                         progress.percentage, progress.speed, progress.eta);
+                            }
+
+                            let progress_copy = {
+                                let progress = progress_state.lock().unwrap();
+                                progress.clone()
+                            };
+
+                            let _ = window.emit("download-progress", progress_copy);
+                            progress_updated = true;
+                            break;
+                        }
+                    }
+                }
+
+                // 4. Final fallback: look for any percentage in download-related lines
+                if !progress_updated && (line.contains("[download]") || line.contains("DL:")) {
+                    if let Some(percent_match) = Regex::new(r"(\d+\.?\d*)%").unwrap().find(&line) {
+                        if let Ok(percentage) = percent_match.as_str().trim_end_matches('%').parse::<f64>() {
+                            eprintln!("Fallback percentage: {}%", percentage);
+                            
+                            let mut progress = progress_state.lock().unwrap();
+                            if percentage > progress.percentage {
+                                progress.percentage = percentage;
+                                
+                                // Estimate speed from percentage change
+                                let elapsed = now.duration_since(progress.download_start_time).unwrap_or_default();
+                                let elapsed_secs = elapsed.as_secs_f64().max(0.1);
+                                
+                                if progress.speed_bytes_per_sec == 0 && percentage > 0.0 {
+                                    let estimated_total = 200_000_000_u64; // 200MB estimate
+                                    let estimated_downloaded = ((percentage / 100.0) * estimated_total as f64) as u64;
+                                    let estimated_speed = (estimated_downloaded as f64 / elapsed_secs) as u64;
+                                    
+                                    progress.speed_bytes_per_sec = estimated_speed;
+                                    progress.speed = format_speed(estimated_speed);
+                                    progress.eta = calculate_eta(estimated_downloaded, estimated_total, estimated_speed);
+                                }
+                                
+                                let progress_copy = progress.clone();
+                                drop(progress);
+                                let _ = window.emit("download-progress", progress_copy);
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -367,7 +812,7 @@ async fn perform_download(
         if trimming_enabled {
             perform_trimming(window, progress_state, output_folder, start_time, end_time).await?;
         }
-        Ok(())
+        Ok(video_title)
     } else {
         let exit_code = output.code().unwrap_or(-1);
         let error_msg = if !stderr_output.is_empty() {
@@ -479,8 +924,12 @@ pub fn run() {
     let progress_state: ProgressState = Arc::new(Mutex::new(DownloadProgress {
         percentage: 0.0,
         speed: String::new(),
+        speed_bytes_per_sec: 0,
         eta: String::new(),
         status: "idle".to_string(),
+        bytes_downloaded: 0,
+        total_bytes: 0,
+        download_start_time: std::time::SystemTime::now(),
     }));
 
     tauri::Builder::default()

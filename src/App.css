@@ -32,6 +32,24 @@
   }
 }
 
+@keyframes slide-right {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(400%);
+  }
+}
+
+@keyframes progress-shine {
+  0% {
+    transform: translateX(-100%) skewX(-15deg);
+  }
+  100% {
+    transform: translateX(200%) skewX(-15deg);
+  }
+}
+
 .animate-slide-in {
   animation: slide-in 0.3s ease-out forwards;
 }
@@ -42,6 +60,14 @@
 
 .animate-glow {
   animation: glow 2s ease-in-out infinite;
+}
+
+.animate-slide-right {
+  animation: slide-right 2s infinite;
+}
+
+.animate-progress-shine {
+  animation: progress-shine 1.5s infinite;
 }
 
 /* Ensure proper font smoothing and text rendering */

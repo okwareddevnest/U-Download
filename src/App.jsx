@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VideoPreview from "./VideoPreview";
+import soundNotifications from "./SoundNotifications";
 import "./App.css";
 
 function App() {
@@ -86,9 +87,17 @@ function App() {
         setEta("");
       });
 
+      const completeUnlisten = await listen("download-complete", (event) => {
+        console.log("Download completed:", event.payload);
+        
+        // Play completion sound only
+        soundNotifications.playDownloadComplete();
+      });
+
       return () => {
         progressUnlisten();
         errorUnlisten();
+        completeUnlisten();
       };
     };
 
@@ -498,55 +507,124 @@ function App() {
           {/* Progress Section */}
           {status !== "idle" && (
             <div className="relative mb-8">
-              <div className={`p-6 rounded-2xl border-2 transition-all duration-500 ${
+              <div className={`p-6 rounded-2xl border-2 transition-all duration-500 backdrop-blur-sm ${
                 status === "downloading" 
-                  ? (isDarkMode ? 'bg-blue-900/30 border-blue-500/50' : 'bg-blue-50/80 border-blue-300/50')
+                  ? (isDarkMode ? 'bg-blue-900/30 border-blue-500/50 shadow-lg shadow-blue-500/10' : 'bg-blue-50/80 border-blue-300/50 shadow-lg shadow-blue-500/10')
                   : status === "completed"
-                  ? (isDarkMode ? 'bg-green-900/30 border-green-500/50' : 'bg-green-50/80 border-green-300/50')
-                  : (isDarkMode ? 'bg-red-900/30 border-red-500/50' : 'bg-red-50/80 border-red-300/50')
+                  ? (isDarkMode ? 'bg-green-900/30 border-green-500/50 shadow-lg shadow-green-500/10' : 'bg-green-50/80 border-green-300/50 shadow-lg shadow-green-500/10')
+                  : (isDarkMode ? 'bg-red-900/30 border-red-500/50 shadow-lg shadow-red-500/10' : 'bg-red-50/80 border-red-300/50 shadow-lg shadow-red-500/10')
               }`}>
-                <div className="flex justify-between items-center mb-4">
-                  <div className="flex items-center gap-2">
-                    <span className={`text-lg font-semibold ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-                      {status === "downloading" ? "🚀 Downloading..." : status === "completed" ? "✅ Complete!" : "❌ Error"}
-                    </span>
+                <div className="flex justify-between items-start mb-4">
+                  <div className="flex flex-col gap-2">
+                    <div className="flex items-center gap-2">
+                      <span className={`text-lg font-semibold ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                        {status === "downloading" ? "🚀 Downloading..." : status === "completed" ? "✅ Complete!" : "❌ Error"}
+                      </span>
+                      {status === "downloading" && (
+                        <div className="flex space-x-1">
+                          <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce [animation-delay:-0.3s]"></div>
+                          <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce [animation-delay:-0.15s]"></div>
+                          <div className="w-1.5 h-1.5 bg-current rounded-full animate-bounce"></div>
+                        </div>
+                      )}
+                    </div>
+                    {/* Bytes Information */}
+                    <div className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-600'}`}>
+                      {progress > 0 && (
+                        <span>Progress: {Math.round(progress)}% completed</span>
+                      )}
+                    </div>
                   </div>
-                  <div className={`text-2xl font-bold ${
-                    status === "downloading" ? 'text-blue-500' : 
+                  <div className={`text-3xl font-bold transition-all duration-300 ${
+                    status === "downloading" ? 'text-blue-500 animate-pulse' : 
                     status === "completed" ? 'text-green-500' : 'text-red-500'
                   }`}>
                     {Math.round(progress)}%
                   </div>
                 </div>
                 
-                {/* Animated Progress Bar */}
-                <div className={`w-full h-4 rounded-full overflow-hidden ${
-                  isDarkMode ? 'bg-gray-700/50' : 'bg-gray-200/50'
-                }`}>
-                  <div 
-                    className={`h-full rounded-full transition-all duration-500 relative overflow-hidden ${
-                      status === "downloading" ? 'bg-gradient-to-r from-blue-500 to-cyan-500' :
-                      status === "completed" ? 'bg-gradient-to-r from-green-500 to-emerald-500' :
-                      'bg-gradient-to-r from-red-500 to-pink-500'
-                    }`}
-                    style={{ width: `${progress}%` }}
-                  >
-                    {status === "downloading" && (
-                      <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-transparent via-white/20 to-transparent animate-pulse"></div>
-                    )}
+                {/* Enhanced Animated Progress Bar */}
+                <div className="relative mb-4">
+                  <div className={`w-full h-6 rounded-full overflow-hidden shadow-inner ${
+                    isDarkMode ? 'bg-gray-700/50' : 'bg-gray-200/50'
+                  }`}>
+                    <div 
+                      className={`h-full rounded-full transition-all duration-500 ease-out relative overflow-hidden ${
+                        status === "downloading" ? 'bg-gradient-to-r from-blue-500 via-cyan-500 to-blue-600' :
+                        status === "completed" ? 'bg-gradient-to-r from-green-500 via-emerald-500 to-green-600' :
+                        'bg-gradient-to-r from-red-500 via-pink-500 to-red-600'
+                      }`}
+                      style={{ width: `${progress}%` }}
+                    >
+                      {/* Animated shine effect for downloading */}
+                      {status === "downloading" && (
+                        <>
+                          <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-transparent via-white/30 to-transparent animate-pulse"></div>
+                          <div className="absolute top-0 -left-full w-1/4 h-full bg-gradient-to-r from-transparent via-white/40 to-transparent animate-[slide-right_2s_infinite]"></div>
+                        </>
+                      )}
+                      {/* Completion sparkle effect */}
+                      {status === "completed" && (
+                        <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-transparent via-yellow-400/40 to-transparent animate-pulse"></div>
+                      )}
+                    </div>
+                  </div>
+                  {/* Progress percentage overlay */}
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <span className={`text-sm font-bold ${
+                      progress > 50 ? 'text-white' : (isDarkMode ? 'text-gray-200' : 'text-gray-700')
+                    } drop-shadow-sm`}>
+                      {progress > 5 ? `${Math.round(progress)}%` : ''}
+                    </span>
                   </div>
                 </div>
                 
-                {/* Speed and ETA */}
-                {(speed || eta) && (
-                  <div className="flex justify-between items-center mt-4 text-sm">
-                    <div className={`flex items-center gap-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                      <span>⚡</span>
-                      <span className="font-medium">{speed || 'Calculating...'}</span>
+                {/* Enhanced Speed and ETA Information */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div className={`p-3 rounded-lg ${isDarkMode ? 'bg-gray-800/50' : 'bg-white/50'} backdrop-blur-sm`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">⚡</span>
+                      <div className="flex flex-col">
+                        <span className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>Speed</span>
+                        <span className={`font-semibold ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                          {speed || (status === "downloading" ? 'Calculating...' : '--')}
+                        </span>
+                      </div>
                     </div>
-                    <div className={`flex items-center gap-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-600'}`}>
-                      <span>⏱️</span>
-                      <span className="font-medium">ETA: {eta || '--:--'}</span>
+                  </div>
+                  
+                  <div className={`p-3 rounded-lg ${isDarkMode ? 'bg-gray-800/50' : 'bg-white/50'} backdrop-blur-sm`}>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg">⏱️</span>
+                      <div className="flex flex-col">
+                        <span className={`text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>Time Left</span>
+                        <span className={`font-semibold ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
+                          {eta || (status === "downloading" ? '--:--' : '--')}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Status messages */}
+                {status === "completed" && (
+                  <div className="mt-4 p-3 rounded-lg bg-green-100 dark:bg-green-900/20 border border-green-300 dark:border-green-700">
+                    <div className="flex items-center gap-2">
+                      <span className="text-green-500">🎉</span>
+                      <span className={`text-sm font-medium ${isDarkMode ? 'text-green-400' : 'text-green-700'}`}>
+                        Download completed successfully!
+                      </span>
+                    </div>
+                  </div>
+                )}
+                
+                {status === "error" && (
+                  <div className="mt-4 p-3 rounded-lg bg-red-100 dark:bg-red-900/20 border border-red-300 dark:border-red-700">
+                    <div className="flex items-center gap-2">
+                      <span className="text-red-500">⚠️</span>
+                      <span className={`text-sm font-medium ${isDarkMode ? 'text-red-400' : 'text-red-700'}`}>
+                        An error occurred during download. Please try again.
+                      </span>
                     </div>
                   </div>
                 )}
