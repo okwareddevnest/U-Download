@@ -1,0 +1,244 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- WiX Template for U-Download MSI Installer -->
+<!-- Zero Dependencies YouTube Downloader -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  
+  <!-- Product definition with zero dependency messaging -->
+  <Product Id="{PRODUCT_ID}" 
+           Name="U-Download" 
+           Language="1033" 
+           Version="2.2.0" 
+           Manufacturer="U-Download Team" 
+           UpgradeCode="{UPGRADE_CODE}">
+    
+    <!-- Package information -->
+    <Package InstallerVersion="300" 
+             Compressed="yes" 
+             InstallScope="perMachine"
+             Description="Fast YouTube Downloader with Zero Dependencies"
+             Comments="All tools bundled: yt-dlp, aria2c, FFmpeg"
+             Keywords="YouTube, Download, Zero Dependencies, Video, Audio"/>
+    
+    <!-- Media and source -->
+    <Media Id="1" Cabinet="u-download.cab" EmbedCab="yes" />
+    
+    <!-- Installation directory structure -->
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="ProgramFiles64Folder">
+        <Directory Id="INSTALLFOLDER" Name="U-Download">
+          
+          <!-- Main application files -->
+          <Component Id="MainApplication" Guid="{MAIN_APP_GUID}">
+            <File Id="MainExecutable" 
+                  Source="$(var.SourceDir)\u-download.exe" 
+                  KeyPath="yes" 
+                  Checksum="yes">
+              <!-- File association for URLs -->
+              <Shortcut Id="ApplicationShortcut" 
+                        Directory="ProgramMenuDir" 
+                        Name="U-Download"
+                        Description="Fast YouTube Downloader - Zero Dependencies"
+                        WorkingDirectory="INSTALLFOLDER"
+                        Icon="ApplicationIcon.exe"
+                        IconIndex="0" />
+            </File>
+            
+            <!-- Registry entries for zero dependency confirmation -->
+            <RegistryValue Root="HKLM" 
+                          Key="Software\U-Download"
+                          Name="BundledDependencies"
+                          Type="string"
+                          Value="yt-dlp,aria2c,ffmpeg"
+                          KeyPath="no" />
+            
+            <RegistryValue Root="HKLM" 
+                          Key="Software\U-Download"
+                          Name="ZeroDependencies"
+                          Type="string"
+                          Value="true"
+                          KeyPath="no" />
+                          
+            <RegistryValue Root="HKLM" 
+                          Key="Software\U-Download"
+                          Name="InstallationDate"
+                          Type="string"
+                          Value="[Date]"
+                          KeyPath="no" />
+          </Component>
+          
+          <!-- Bundled binaries component -->
+          <Component Id="BundledBinaries" Guid="{BUNDLED_BINARIES_GUID}">
+            <!-- All binary files will be added here by Tauri -->
+            <RegistryValue Root="HKLM" 
+                          Key="Software\U-Download\BundledTools"
+                          Name="yt-dlp"
+                          Type="string"
+                          Value="bundled"
+                          KeyPath="yes" />
+          </Component>
+          
+        </Directory>
+      </Directory>
+      
+      <!-- Start Menu folder -->
+      <Directory Id="ProgramMenuFolder">
+        <Directory Id="ProgramMenuDir" Name="U-Download">
+          <Component Id="StartMenuShortcuts" Guid="{STARTMENU_GUID}">
+            <Shortcut Id="UninstallProduct"
+                      Name="Uninstall U-Download"
+                      Target="[System64Folder]msiexec.exe"
+                      Arguments="/x [ProductCode]"
+                      Description="Uninstalls U-Download" />
+            <RemoveFolder Id="ProgramMenuDir" On="uninstall" />
+            <RegistryValue Root="HKCU" 
+                          Key="Software\U-Download\StartMenu" 
+                          Name="installed" 
+                          Type="integer" 
+                          Value="1" 
+                          KeyPath="yes" />
+          </Component>
+        </Directory>
+      </Directory>
+      
+      <!-- Desktop folder -->
+      <Directory Id="DesktopFolder">
+        <Component Id="DesktopShortcut" Guid="{DESKTOP_GUID}">
+          <Shortcut Id="DesktopShortcut"
+                    Name="U-Download"
+                    Description="Fast YouTube Downloader - Zero Dependencies"
+                    Target="[INSTALLFOLDER]u-download.exe"
+                    WorkingDirectory="INSTALLFOLDER"
+                    Icon="ApplicationIcon.exe"
+                    IconIndex="0" />
+          <RegistryValue Root="HKCU" 
+                        Key="Software\U-Download\Desktop" 
+                        Name="installed" 
+                        Type="integer" 
+                        Value="1" 
+                        KeyPath="yes" />
+        </Component>
+      </Directory>
+      
+    </Directory>
+    
+    <!-- Application icon -->
+    <Icon Id="ApplicationIcon.exe" SourceFile="$(var.SourceDir)\u-download.exe" />
+    
+    <!-- Features for installation -->
+    <Feature Id="MainFeature" 
+             Title="U-Download Application" 
+             Description="Main application with all dependencies bundled (603 MB)"
+             Level="1"
+             ConfigurableDirectory="INSTALLFOLDER">
+      <ComponentRef Id="MainApplication" />
+      <ComponentRef Id="BundledBinaries" />
+      
+      <!-- Optional components -->
+      <Feature Id="StartMenuShortcuts" 
+               Title="Start Menu Shortcuts" 
+               Description="Add shortcuts to Start Menu"
+               Level="1">
+        <ComponentRef Id="StartMenuShortcuts" />
+      </Feature>
+      
+      <Feature Id="DesktopShortcut" 
+               Title="Desktop Shortcut" 
+               Description="Add shortcut to Desktop"
+               Level="1">
+        <ComponentRef Id="DesktopShortcut" />
+      </Feature>
+    </Feature>
+    
+    <!-- User Interface -->
+    <UI Id="UserInterface">
+      <UIRef Id="WixUI_FeatureTree" />
+      <UIRef Id="WixUI_ErrorProgressText" />
+      
+      <!-- Custom welcome dialog -->
+      <Dialog Id="WelcomeDlg" Width="370" Height="270" Title="Welcome to U-Download Setup">
+        <Control Id="Title" Type="Text" X="135" Y="20" Width="220" Height="60" Transparent="yes" NoPrefix="yes">
+          <Text>Welcome to U-Download</Text>
+        </Control>
+        <Control Id="Description" Type="Text" X="135" Y="70" Width="220" Height="120" Transparent="yes" NoPrefix="yes">
+          <Text>U-Download comes with ZERO external dependencies.
+
+All tools are bundled:
+• yt-dlp (YouTube downloader)
+• aria2c (Download accelerator)  
+• FFmpeg (Media processor)
+
+No additional software installation required!</Text>
+        </Control>
+        <Control Id="Next" Type="PushButton" X="230" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Next">
+          <Publish Event="NewDialog" Value="LicenseAgreementDlg">1</Publish>
+        </Control>
+        <Control Id="Cancel" Type="PushButton" X="304" Y="243" Width="56" Height="17" Cancel="yes" Text="Cancel">
+          <Publish Event="SpawnDialog" Value="CancelDlg">1</Publish>
+        </Control>
+      </Dialog>
+      
+      <!-- Custom finish dialog -->
+      <Dialog Id="FinishDlg" Width="370" Height="270" Title="Installation Complete">
+        <Control Id="Title" Type="Text" X="135" Y="20" Width="220" Height="60" Transparent="yes" NoPrefix="yes">
+          <Text>Installation Complete!</Text>
+        </Control>
+        <Control Id="Description" Type="Text" X="135" Y="70" Width="220" Height="120" Transparent="yes" NoPrefix="yes">
+          <Text>U-Download has been installed successfully.
+
+✓ All dependencies bundled and ready
+✓ No additional setup required
+✓ Ready to download immediately
+
+Click Finish to complete the setup.</Text>
+        </Control>
+        <Control Id="Launch" Type="CheckBox" X="135" Y="200" Width="220" Height="17" Property="LAUNCH_APP" CheckBoxValue="1">
+          <Text>&amp;Launch U-Download now</Text>
+        </Control>
+        <Control Id="Finish" Type="PushButton" X="230" Y="243" Width="56" Height="17" Default="yes" Text="&amp;Finish">
+          <Publish Event="EndDialog" Value="Return">1</Publish>
+        </Control>
+      </Dialog>
+    </UI>
+    
+    <!-- Launch application after installation if requested -->
+    <CustomAction Id="LaunchApplication" 
+                  FileKey="MainExecutable" 
+                  ExeCommand="" 
+                  Execute="immediate" 
+                  Impersonate="yes" 
+                  Return="asyncNoWait" />
+    
+    <InstallExecuteSequence>
+      <Custom Action="LaunchApplication" After="InstallFinalize">
+        <![CDATA[LAUNCH_APP = "1" AND NOT Installed]]>
+      </Custom>
+    </InstallExecuteSequence>
+    
+    <!-- System requirements -->
+    <Condition Message="This application requires Windows 7 or higher.">
+      <![CDATA[Installed OR (VersionNT >= 601)]]>
+    </Condition>
+    
+    <!-- Disk space requirement (604MB + buffer) -->
+    <Condition Message="This application requires at least 700 MB of free disk space.">
+      <![CDATA[Installed OR (FREESPACE_INSTALLFOLDER >= 734003200)]]>
+    </Condition>
+    
+    <!-- Upgrade logic -->
+    <Upgrade Id="{UPGRADE_CODE}">
+      <UpgradeVersion Minimum="0.0.0" 
+                      Maximum="2.2.0" 
+                      Property="OLDERVERSIONBEINGUPGRADED" 
+                      IncludeMinimum="yes" 
+                      IncludeMaximum="no" />
+      <UpgradeVersion Minimum="2.2.0" 
+                      OnlyDetect="yes" 
+                      Property="NEWERVERSIONDETECTED" />
+    </Upgrade>
+    
+    <InstallExecuteSequence>
+      <RemoveExistingProducts After="InstallInitialize" />
+    </InstallExecuteSequence>
+    
+  </Product>
+</Wix>

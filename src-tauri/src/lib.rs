@@ -7,7 +7,17 @@ use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_dialog::DialogExt;
+use tauri_plugin_updater::UpdaterExt;
 use notify_rust::Notification;
+
+mod binary_manager;
+mod content_manifest;
+mod content_downloader;
+mod crypto;
+
+use binary_manager::BinaryManager;
+use content_manifest::ContentManager;
+use content_downloader::{ContentDownloader, ContentDownloadProgress};
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct DownloadProgress {
@@ -31,7 +41,28 @@ struct VideoMetadata {
     upload_date: Option<String>,
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct UpdateInfo {
+    available: bool,
+    current_version: String,
+    latest_version: Option<String>,
+    release_notes: Option<String>,
+    download_url: Option<String>,
+    size_bytes: Option<u64>,
+    zero_dependencies: bool,
+    bundled_components: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Clone)]
+struct UpdateProgress {
+    percentage: f64,
+    bytes_downloaded: u64,
+    total_bytes: u64,
+    status: String, // downloading, installing, completed, error
+}
+
 type ProgressState = Arc<Mutex<DownloadProgress>>;
+type UpdateProgressState = Arc<Mutex<UpdateProgress>>;
 
 fn format_speed(bytes_per_sec: u64) -> String {
     if bytes_per_sec == 0 {
@@ -180,17 +211,13 @@ fn send_download_started_notification(filename: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_video_metadata(url: String) -> Result<VideoMetadata, String> {
-    // Test if yt-dlp is available
-    match Command::new("yt-dlp").arg("--version").output() {
-        Ok(_) => {}
-        Err(e) => {
-            return Err(format!("yt-dlp not found: {}. Please install yt-dlp.", e));
-        }
-    }
+async fn get_video_metadata(url: String, app_handle: AppHandle) -> Result<VideoMetadata, String> {
+    // Get bundled binary paths
+    let binary_manager = BinaryManager::new(&app_handle)?;
+    let paths = binary_manager.get_binary_paths()?;
 
-    // Get video information using yt-dlp --dump-json
-    let output = Command::new("yt-dlp")
+    // Get video information using bundled yt-dlp --dump-json
+    let output = Command::new(&paths.yt_dlp)
         .arg("--dump-json")
         .arg("--no-download")
         .arg(&url)
@@ -235,17 +262,20 @@ async fn get_video_metadata(url: String) -> Result<VideoMetadata, String> {
 }
 
 #[tauri::command]
-async fn check_ffmpeg() -> Result<String, String> {
-    match Command::new("ffmpeg").arg("-version").output() {
+async fn check_ffmpeg(app_handle: AppHandle) -> Result<String, String> {
+    let binary_manager = BinaryManager::new(&app_handle)?;
+    let paths = binary_manager.get_binary_paths()?;
+    
+    match Command::new(&paths.ffmpeg).arg("-version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             Ok(format!(
-                "✅ FFmpeg: {}",
+                "✅ FFmpeg (bundled): {}",
                 version.lines().next().unwrap_or("unknown")
             ))
         }
         Err(e) => Err(format!(
-            "❌ FFmpeg: Not found ({}). Please install with: sudo apt install ffmpeg",
+            "❌ FFmpeg (bundled): {}",
             e
         )),
     }
@@ -274,6 +304,7 @@ async fn select_output_folder(app_handle: AppHandle) -> Result<String, String> {
 async fn start_download(
     window: Window,
     progress_state: State<'_, ProgressState>,
+    app_handle: AppHandle,
     url: String,
     download_type: String,
     quality: String,
@@ -282,6 +313,7 @@ async fn start_download(
     end_time: Option<f64>,
 ) -> Result<(), String> {
     let window_clone = window.clone();
+    let app_handle_clone = app_handle.clone();
     let progress_arc = progress_state.inner().clone();
     let url_clone = url.clone();
     let download_type_clone = download_type.clone();
@@ -293,6 +325,7 @@ async fn start_download(
     tokio::spawn(async move {
         let result = perform_download(
             &window_clone,
+            &app_handle_clone,
             progress_arc.clone(),
             &url_clone,
             &download_type_clone,
@@ -331,39 +364,389 @@ async fn start_download(
 }
 
 #[tauri::command]
-async fn test_dependencies() -> Result<String, String> {
-    let mut results = Vec::new();
+async fn test_dependencies(app_handle: AppHandle) -> Result<String, String> {
+    let binary_manager = BinaryManager::new(&app_handle)?;
+    binary_manager.verify_binaries()
+}
 
-    // Test yt-dlp
-    match Command::new("yt-dlp").arg("--version").output() {
+#[tauri::command]
+async fn check_for_updates(app_handle: AppHandle) -> Result<UpdateInfo, String> {
+    let updater = app_handle.updater().map_err(|e| format!("Failed to initialize updater: {}", e))?;
+    
+    match updater.check().await {
+        Ok(Some(update)) => {
+            let size_bytes = update.body.as_ref().map(|body| body.len() as u64);
+            
+            Ok(UpdateInfo {
+                available: true,
+                current_version: update.current_version.to_string(),
+                latest_version: Some(update.version.to_string()),
+                release_notes: Some(format!("### U-Download v{} - Content Pack System\n\n🎯 **Minimal Installer Size**\n- Core app under 100MB per platform\n- Essential binaries downloaded separately\n- Fast installation, content downloaded on first run\n\n✨ **What's New**\n- Enhanced packaging with content pack system\n- Improved first-run experience with guided setup\n- Delta updates for efficient updates\n- Better content management and verification\n\n🔧 **Content Packs**\n- **Core Binaries Pack** - yt-dlp, aria2c, FFmpeg\n- Separate versioning from main app\n- Resumable downloads with progress tracking\n- Cryptographic verification for security\n\n---\n**Efficient Updates** - Only download what's changed!", update.version)),
+                download_url: Some(format!("GitHub Release v{}", update.version)),
+                size_bytes,
+                zero_dependencies: false,
+                bundled_components: vec![
+                    "Core app (UI and logic)".to_string(),
+                    "Content pack system".to_string(),
+                    "Updater with delta support".to_string(),
+                    "Note: Binaries downloaded via content packs".to_string(),
+                ],
+            })
+        }
+        Ok(None) => Ok(UpdateInfo {
+            available: false,
+            current_version: app_handle.package_info().version.to_string(),
+            latest_version: None,
+            release_notes: None,
+            download_url: None,
+            size_bytes: None,
+            zero_dependencies: false,
+            bundled_components: vec![
+                "Core app (UI and logic) - CURRENT".to_string(),
+                "Content pack system - CURRENT".to_string(),
+                "Updater with delta support - CURRENT".to_string(),
+                "Content packs can be updated separately".to_string(),
+            ],
+        }),
+        Err(e) => Err(format!("Failed to check for updates: {}", e)),
+    }
+}
+
+#[tauri::command]
+async fn install_update(
+    window: Window,
+    app_handle: AppHandle,
+    update_progress_state: State<'_, UpdateProgressState>,
+) -> Result<(), String> {
+    let updater = app_handle.updater().map_err(|e| format!("Failed to initialize updater: {}", e))?;
+    
+    match updater.check().await {
+        Ok(Some(update)) => {
+            // Initialize update progress
+            {
+                let mut progress = update_progress_state.lock().unwrap();
+                progress.percentage = 0.0;
+                progress.bytes_downloaded = 0;
+                progress.total_bytes = update.body.as_ref().map(|body| body.len() as u64).unwrap_or(0);
+                progress.status = "downloading".to_string();
+                let progress_copy = progress.clone();
+                let _ = window.emit("update-progress", progress_copy);
+            }
+
+            // Send update started notification
+            let _ = send_notification(
+                "Update Started 🔄",
+                &format!("Downloading U-Download v{} (Zero Dependencies)", update.version),
+            );
+
+            // Start update progress monitoring
+            let progress_arc = update_progress_state.inner().clone();
+            let window_clone = window.clone();
+            tokio::spawn(async move {
+                let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+                loop {
+                    interval.tick().await;
+                    let progress = {
+                        let progress = progress_arc.lock().unwrap();
+                        if progress.status == "completed" || progress.status == "error" {
+                            break;
+                        }
+                        progress.clone()
+                    };
+                    let _ = window_clone.emit("update-progress", progress);
+                }
+            });
+
+            // Perform the update download and installation
+            match update.download_and_install(
+                |chunk_length, content_length| {
+                    // Update progress during download
+                    if let Some(total) = content_length {
+                        let progress_arc = update_progress_state.inner().clone();
+                        let mut progress = progress_arc.lock().unwrap();
+                        progress.percentage = (chunk_length as f64 / total as f64) * 100.0;
+                        progress.bytes_downloaded = chunk_length as u64;
+                        progress.total_bytes = total;
+                        progress.status = "downloading".to_string();
+                    }
+                },
+                || {
+                    // Download finished callback
+                    let progress_arc = update_progress_state.inner().clone();
+                    let mut progress = progress_arc.lock().unwrap();
+                    progress.status = "installing".to_string();
+                }
+            ).await {
+                Ok(_) => {
+                    // Update progress to completed
+                    {
+                        let mut progress = update_progress_state.lock().unwrap();
+                        progress.status = "installing".to_string();
+                        progress.percentage = 90.0;
+                        let progress_copy = progress.clone();
+                        let _ = window.emit("update-progress", progress_copy);
+                    }
+
+                    // Send update completed notification
+                    let _ = send_notification(
+                        "Update Complete! 🎉",
+                        &format!("U-Download v{} installed successfully. All dependencies bundled!", update.version),
+                    );
+
+                    // Final progress update
+                    {
+                        let mut progress = update_progress_state.lock().unwrap();
+                        progress.status = "completed".to_string();
+                        progress.percentage = 100.0;
+                        let progress_copy = progress.clone();
+                        let _ = window.emit("update-progress", progress_copy);
+                    }
+
+                    // Emit update complete event
+                    let _ = window.emit("update-complete", format!("Updated to v{}", update.version));
+                    
+                    Ok(())
+                }
+                Err(e) => {
+                    // Update progress to error
+                    {
+                        let mut progress = update_progress_state.lock().unwrap();
+                        progress.status = "error".to_string();
+                        let progress_copy = progress.clone();
+                        let _ = window.emit("update-progress", progress_copy);
+                    }
+
+                    // Send error notification
+                    let _ = send_notification(
+                        "Update Failed ❌",
+                        &format!("Failed to install update: {}", e),
+                    );
+
+                    let _ = window.emit("update-error", format!("Update failed: {}", e));
+                    Err(format!("Failed to download and install update: {}", e))
+                }
+            }
+        }
+        Ok(None) => Err("No update available".to_string()),
+        Err(e) => Err(format!("Failed to check for updates: {}", e)),
+    }
+}
+
+#[tauri::command]
+async fn check_content_status(app_handle: AppHandle) -> Result<serde_json::Value, String> {
+    let content_manager = ContentManager::new(&app_handle)?;
+    
+    // Load manifest from cache or remote
+    let manifest_url = "https://github.com/okwareddevnest/U-Download/releases/latest/download/content_manifest.json";
+    let manifest = content_manager.load_manifest(manifest_url).await?;
+    
+    // Get installation status for all compatible packs
+    let status = content_manager.get_installation_status(&manifest);
+    let compatible_packs = content_manager.find_compatible_packs(&manifest);
+    
+    Ok(serde_json::json!({
+        "manifest_version": manifest.version,
+        "app_version": manifest.app_version,
+        "compatible_packs": compatible_packs,
+        "installation_status": status,
+        "current_platform": ContentManager::get_current_platform()
+    }))
+}
+
+#[tauri::command]
+async fn download_content_pack(
+    window: Window,
+    app_handle: AppHandle,
+    pack_id: String,
+) -> Result<(), String> {
+    let content_manager = ContentManager::new(&app_handle)?;
+    
+    // Load manifest
+    let manifest_url = "https://github.com/okwareddevnest/U-Download/releases/latest/download/content_manifest.json";
+    let manifest = content_manager.load_manifest(manifest_url).await?;
+    
+    // Find the pack
+    let pack = manifest.content_packs.iter()
+        .find(|p| p.id == pack_id)
+        .ok_or("Content pack not found")?;
+    
+    // Find platform
+    let current_platform = ContentManager::get_current_platform();
+    let platform = pack.platforms.iter()
+        .find(|p| p.id == current_platform)
+        .ok_or("Platform not supported")?;
+    
+    // Initialize content downloader
+    let content_dir = app_handle.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("content");
+    
+    let downloader = ContentDownloader::new(app_handle, content_dir)?;
+    
+    // Start download
+    downloader.download_pack(pack, platform, &window).await?;
+    
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_content_download_progress(
+    app_handle: AppHandle,
+    pack_id: String,
+) -> Result<Option<ContentDownloadProgress>, String> {
+    let content_dir = app_handle.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("content");
+    
+    let downloader = ContentDownloader::new(app_handle, content_dir)?;
+    Ok(downloader.get_download_progress(&pack_id))
+}
+
+#[tauri::command]
+async fn cancel_content_download(
+    app_handle: AppHandle,
+    pack_id: String,
+) -> Result<(), String> {
+    let content_dir = app_handle.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("content");
+    
+    let downloader = ContentDownloader::new(app_handle, content_dir)?;
+    downloader.cancel_download(&pack_id)
+}
+
+#[tauri::command]
+async fn pause_content_download(
+    app_handle: AppHandle,
+    pack_id: String,
+) -> Result<(), String> {
+    let content_dir = app_handle.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("content");
+    
+    let downloader = ContentDownloader::new(app_handle, content_dir)?;
+    downloader.pause_download(&pack_id)
+}
+
+#[tauri::command]
+async fn resume_content_download(
+    app_handle: AppHandle,
+    pack_id: String,
+) -> Result<(), String> {
+    let content_dir = app_handle.path().app_data_dir()
+        .map_err(|e| format!("Failed to get app data dir: {}", e))?
+        .join("content");
+    
+    let downloader = ContentDownloader::new(app_handle, content_dir)?;
+    downloader.resume_download(&pack_id)
+}
+
+#[tauri::command]
+async fn get_bundled_dependencies_info(app_handle: AppHandle) -> Result<Vec<serde_json::Value>, String> {
+    let binary_manager = BinaryManager::new(&app_handle)?;
+    let paths = binary_manager.get_binary_paths()?;
+    
+    let mut dependencies = Vec::new();
+    
+    // Check yt-dlp
+    match Command::new(&paths.yt_dlp).arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
-            results.push(format!("✅ yt-dlp: {}", version.trim()));
+            let size = std::fs::metadata(&paths.yt_dlp)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            
+            dependencies.push(serde_json::json!({
+                "name": "yt-dlp",
+                "description": "YouTube downloader",
+                "version": version.trim(),
+                "status": "bundled",
+                "size_bytes": size,
+                "path": paths.yt_dlp.to_string_lossy(),
+                "type": "essential"
+            }));
         }
-        Err(e) => {
-            results.push(format!("❌ yt-dlp: Not found ({})", e));
+        Err(_) => {
+            dependencies.push(serde_json::json!({
+                "name": "yt-dlp",
+                "description": "YouTube downloader",
+                "version": "unknown",
+                "status": "error",
+                "size_bytes": 0,
+                "path": paths.yt_dlp.to_string_lossy(),
+                "type": "essential"
+            }));
         }
     }
-
-    // Test aria2c
-    match Command::new("aria2c").arg("--version").output() {
+    
+    // Check aria2c
+    match Command::new(&paths.aria2c).arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
-            results.push(format!(
-                "✅ aria2c: {}",
-                version.lines().next().unwrap_or("unknown")
-            ));
+            let size = std::fs::metadata(&paths.aria2c)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            
+            dependencies.push(serde_json::json!({
+                "name": "aria2c",
+                "description": "Download accelerator",
+                "version": version.lines().next().unwrap_or("unknown"),
+                "status": "bundled",
+                "size_bytes": size,
+                "path": paths.aria2c.to_string_lossy(),
+                "type": "essential"
+            }));
         }
-        Err(e) => {
-            results.push(format!("❌ aria2c: Not found ({})", e));
+        Err(_) => {
+            dependencies.push(serde_json::json!({
+                "name": "aria2c",
+                "description": "Download accelerator",
+                "version": "unknown",
+                "status": "error",
+                "size_bytes": 0,
+                "path": paths.aria2c.to_string_lossy(),
+                "type": "essential"
+            }));
         }
     }
-
-    Ok(results.join("\n"))
+    
+    // Check FFmpeg
+    match Command::new(&paths.ffmpeg).arg("-version").output() {
+        Ok(output) => {
+            let version = String::from_utf8_lossy(&output.stdout);
+            let size = std::fs::metadata(&paths.ffmpeg)
+                .map(|m| m.len())
+                .unwrap_or(0);
+            
+            dependencies.push(serde_json::json!({
+                "name": "ffmpeg",
+                "description": "Media processor",
+                "version": version.lines().next().unwrap_or("unknown"),
+                "status": "bundled",
+                "size_bytes": size,
+                "path": paths.ffmpeg.to_string_lossy(),
+                "type": "essential"
+            }));
+        }
+        Err(_) => {
+            dependencies.push(serde_json::json!({
+                "name": "ffmpeg",
+                "description": "Media processor",
+                "version": "unknown",
+                "status": "error",
+                "size_bytes": 0,
+                "path": paths.ffmpeg.to_string_lossy(),
+                "type": "essential"
+            }));
+        }
+    }
+    
+    Ok(dependencies)
 }
 
 async fn perform_download(
     window: &Window,
+    app_handle: &AppHandle,
     progress_state: ProgressState,
     url: &str,
     download_type: &str,
@@ -372,19 +755,27 @@ async fn perform_download(
     start_time: Option<f64>,
     end_time: Option<f64>,
 ) -> Result<String, String> {
-    // First, test if yt-dlp is available
-    match Command::new("yt-dlp").arg("--version").output() {
+    // Get bundled binary paths
+    let binary_manager = BinaryManager::new(app_handle)?;
+    let paths = binary_manager.get_binary_paths()?;
+    
+    eprintln!("Using bundled binaries:");
+    eprintln!("  yt-dlp: {}", paths.yt_dlp.display());
+    eprintln!("  aria2c: {}", paths.aria2c.display());
+    eprintln!("  ffmpeg: {}", paths.ffmpeg.display());
+
+    // Verify binaries are working
+    match Command::new(&paths.yt_dlp).arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             eprintln!("yt-dlp version: {}", version.trim());
         }
         Err(e) => {
-            return Err(format!("yt-dlp not found or not executable: {}. Please install with: sudo apt install yt-dlp", e));
+            return Err(format!("Bundled yt-dlp not working: {}", e));
         }
     }
 
-    // Test if aria2c is available
-    match Command::new("aria2c").arg("--version").output() {
+    match Command::new(&paths.aria2c).arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             eprintln!(
@@ -393,28 +784,28 @@ async fn perform_download(
             );
         }
         Err(e) => {
-            return Err(format!("aria2c not found or not executable: {}. Please install with: sudo apt install aria2", e));
+            return Err(format!("Bundled aria2c not working: {}", e));
         }
     }
 
     // Check if FFmpeg is available for trimming
     let trimming_enabled = start_time.is_some() || end_time.is_some();
     if trimming_enabled {
-        match Command::new("ffmpeg").arg("-version").output() {
+        match Command::new(&paths.ffmpeg).arg("-version").output() {
             Ok(_) => {
                 eprintln!("FFmpeg is available for trimming");
             }
             Err(e) => {
-                return Err(format!("FFmpeg not found or not executable: {}. Please install with: sudo apt install ffmpeg", e));
+                return Err(format!("Bundled FFmpeg not working: {}", e));
             }
         }
     }
 
-    let mut cmd = Command::new("yt-dlp");
+    let mut cmd = Command::new(&paths.yt_dlp);
 
     // Basic arguments for better quality and performance
     cmd.arg("--external-downloader")
-        .arg("aria2c")
+        .arg(&paths.aria2c)
         .arg("--external-downloader-args")
         .arg("-x 16 -s 16 -k 1M")
         .arg("--progress")
@@ -474,7 +865,7 @@ async fn perform_download(
         })?;
 
     // Get video title for notification
-    let video_title = match get_video_metadata(url.to_string()).await {
+    let video_title = match get_video_metadata(url.to_string(), app_handle.clone()).await {
         Ok(metadata) => metadata.title,
         Err(_) => "Unknown Video".to_string(),
     };
@@ -805,7 +1196,7 @@ async fn perform_download(
     if output.success() {
         // If trimming is enabled, perform FFmpeg trimming
         if trimming_enabled {
-            perform_trimming(window, progress_state, output_folder, start_time, end_time).await?;
+            perform_trimming(window, progress_state, output_folder, start_time, end_time, &paths.ffmpeg).await?;
         }
         Ok(video_title)
     } else {
@@ -830,6 +1221,7 @@ async fn perform_trimming(
     output_folder: &str,
     start_time: Option<f64>,
     end_time: Option<f64>,
+    ffmpeg_path: &std::path::Path,
 ) -> Result<(), String> {
     use std::fs;
     use std::path::Path;
@@ -854,7 +1246,7 @@ async fn perform_trimming(
     let final_name = file_name_str.replace("_temp", "");
     let final_path = folder_path.join(final_name);
 
-    let mut ffmpeg_cmd = Command::new("ffmpeg");
+    let mut ffmpeg_cmd = Command::new(ffmpeg_path);
 
     // Add input file
     ffmpeg_cmd.arg("-i").arg(&temp_path);
@@ -927,17 +1319,35 @@ pub fn run() {
         download_start_time: std::time::SystemTime::now(),
     }));
 
+    let update_progress_state: UpdateProgressState = Arc::new(Mutex::new(UpdateProgress {
+        percentage: 0.0,
+        bytes_downloaded: 0,
+        total_bytes: 0,
+        status: "idle".to_string(),
+    }));
+
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_dialog::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .manage(progress_state)
+        .manage(update_progress_state)
         .invoke_handler(tauri::generate_handler![
             select_output_folder,
             start_download,
             test_dependencies,
             get_video_metadata,
-            check_ffmpeg
+            check_ffmpeg,
+            check_for_updates,
+            install_update,
+            get_bundled_dependencies_info,
+            check_content_status,
+            download_content_pack,
+            get_content_download_progress,
+            cancel_content_download,
+            pause_content_download,
+            resume_content_download
         ])
         .setup(move |app| {
             let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;

@@ -1,0 +1,15 @@
+[Desktop Entry]
+Version=1.0
+Name=U-Download
+GenericName=YouTube Downloader
+Comment=Fast, cross-platform YouTube downloader with GUI
+Exec=u-download %U
+Icon=u-download
+Terminal=false
+Type=Application
+Categories=AudioVideo;Video;Network;
+Keywords=youtube;download;video;audio;yt-dlp;
+MimeType=x-scheme-handler/http;x-scheme-handler/https;
+StartupNotify=true
+StartupWMClass=U-Download
+X-AppStream-Ignore=true

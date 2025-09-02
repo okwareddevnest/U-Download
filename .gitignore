@@ -41,6 +41,7 @@ test-*
 debug*
 *.md
 !README.md
+# !prompt.md
 install.sh
 
 # OS generated files

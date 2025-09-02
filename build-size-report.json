@@ -1,0 +1,70 @@
+{
+  "timestamp": "2025-09-02T20:02:46.472Z",
+  "projectRoot": "/home/okware/Software Projects/U-Download/u-download",
+  "passed": true,
+  "totalArtifacts": 4,
+  "failedArtifacts": 0,
+  "results": [
+    {
+      "type": "deb",
+      "name": "U-Download_2.2.0_amd64.deb",
+      "path": "/home/okware/Software Projects/U-Download/u-download/src-tauri/target/release/bundle/deb/U-Download_2.2.0_amd64.deb",
+      "size": 9759952,
+      "limit": 104857600,
+      "percentage": 9.307815551757812,
+      "passed": true,
+      "sizeFormatted": "9.3 MB",
+      "limitFormatted": "100.0 MB"
+    },
+    {
+      "type": "deb",
+      "name": "U-Download_3.0.0_amd64.deb",
+      "path": "/home/okware/Software Projects/U-Download/u-download/src-tauri/target/release/bundle/deb/U-Download_3.0.0_amd64.deb",
+      "size": 9760500,
+      "limit": 104857600,
+      "percentage": 9.308338165283203,
+      "passed": true,
+      "sizeFormatted": "9.3 MB",
+      "limitFormatted": "100.0 MB"
+    },
+    {
+      "type": "rpm",
+      "name": "U-Download-2.2.0-1.x86_64.rpm",
+      "path": "/home/okware/Software Projects/U-Download/u-download/src-tauri/target/release/bundle/rpm/U-Download-2.2.0-1.x86_64.rpm",
+      "size": 9758395,
+      "limit": 104857600,
+      "percentage": 9.306330680847168,
+      "passed": true,
+      "sizeFormatted": "9.3 MB",
+      "limitFormatted": "100.0 MB"
+    },
+    {
+      "type": "rpm",
+      "name": "U-Download-3.0.0-1.x86_64.rpm",
+      "path": "/home/okware/Software Projects/U-Download/u-download/src-tauri/target/release/bundle/rpm/U-Download-3.0.0-1.x86_64.rpm",
+      "size": 9758183,
+      "limit": 104857600,
+      "percentage": 9.30612850189209,
+      "passed": true,
+      "sizeFormatted": "9.3 MB",
+      "limitFormatted": "100.0 MB"
+    }
+  ],
+  "failures": [],
+  "summary": {
+    "deb": {
+      "count": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalSize": 19520452,
+      "averageSize": 9760226
+    },
+    "rpm": {
+      "count": 2,
+      "passed": 2,
+      "failed": 0,
+      "totalSize": 19516578,
+      "averageSize": 9758289
+    }
+  }
+}

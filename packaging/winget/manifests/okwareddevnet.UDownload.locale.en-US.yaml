@@ -1,0 +1,67 @@
+# Created with YamlCreate.ps1 v2.4.1
+# yaml-language-server: $schema=https://aka.ms/winget-manifest.defaultLocale.1.6.0.schema.json
+
+PackageIdentifier: okwareddevnet.UDownload
+PackageVersion: 2.2.0
+PackageLocale: en-US
+Publisher: okwareddevnet
+PublisherUrl: https://github.com/okwareddevnet
+PublisherSupportUrl: https://github.com/okwareddevnest/U-Download/issues
+Author: Dedan Okware
+PackageName: U-Download
+PackageUrl: https://github.com/okwareddevnest/U-Download
+License: MIT
+LicenseUrl: https://github.com/okwareddevnest/U-Download/blob/main/LICENSE
+Copyright: Copyright © 2025 U-Download. All rights reserved.
+CopyrightUrl: https://github.com/okwareddevnest/U-Download/blob/main/LICENSE
+ShortDescription: Fast, cross-platform YouTube downloader with GUI - Zero dependencies required
+Description: |-
+  U-Download is a beautiful, cross-platform YouTube downloader that comes with all dependencies bundled.
+  
+  ✅ ZERO SETUP REQUIRED - No need to install Python, yt-dlp, aria2c, or FFmpeg separately
+  ✅ HIGH-SPEED DOWNLOADS - Uses aria2c for multi-connection downloading
+  ✅ FORMAT SELECTION - Download video, audio, or both in various quality options  
+  ✅ VIDEO TRIMMING - Built-in video trimming with precise time controls
+  ✅ MODERN GUI - Beautiful interface built with Tauri and React
+  ✅ PROGRESS TRACKING - Real-time download progress with detailed information
+  ✅ SYSTEM NOTIFICATIONS - Get notified when downloads complete
+  ✅ CROSS-PLATFORM - Works on Windows, macOS, and Linux
+  
+  Unlike other YouTube downloaders, U-Download is completely self-contained with all required tools bundled inside the application. Just install and use!
+Moniker: u-download
+Tags:
+- youtube
+- downloader  
+- video
+- audio
+- gui
+- desktop
+- cross-platform
+- yt-dlp
+- aria2c
+- ffmpeg
+- zero-dependencies
+- self-contained
+ReleaseNotes: |-
+  - Complete zero-dependency implementation
+  - All binaries (yt-dlp, aria2c, ffmpeg) now bundled
+  - Cross-platform installation support
+  - Enhanced package manager integration
+  - Improved auto-updater functionality
+ReleaseNotesUrl: https://github.com/okwareddevnest/U-Download/releases/tag/v2.2.0
+PurchaseUrl: https://github.com/okwareddevnest/U-Download
+InstallationNotes: |-
+  U-Download is now fully self-contained! No additional dependencies need to be installed.
+  
+  After installation:
+  • Run 'u-download' from command line
+  • Or find 'U-Download' in your Start Menu
+  
+  All required tools (yt-dlp, aria2c, FFmpeg) are bundled and ready to use.
+Documentations:
+- DocumentLabel: README
+  DocumentUrl: https://github.com/okwareddevnest/U-Download/blob/main/README.md
+- DocumentLabel: Installation Guide  
+  DocumentUrl: https://github.com/okwareddevnest/U-Download/blob/main/INSTALLATION.md
+ManifestType: defaultLocale
+ManifestVersion: 1.6.0

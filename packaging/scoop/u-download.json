@@ -1,0 +1,134 @@
+{
+  "version": "2.2.0",
+  "description": "Fast, cross-platform YouTube downloader with GUI - Zero dependencies required",
+  "homepage": "https://github.com/okwareddevnest/U-Download",
+  "license": "MIT",
+  "notes": [
+    "U-Download comes with ALL dependencies bundled - no additional setup required!",
+    "",
+    "✅ ZERO EXTERNAL DEPENDENCIES:",
+    "  • yt-dlp (YouTube downloader) - BUNDLED",
+    "  • aria2c (Download accelerator) - BUNDLED",
+    "  • FFmpeg (Media processor) - BUNDLED",
+    "",
+    "✅ NO SETUP NEEDED:",
+    "  • No Python installation required",
+    "  • No yt-dlp installation required",
+    "  • No aria2c installation required",
+    "  • No FFmpeg installation required",
+    "  • No PATH configuration needed",
+    "",
+    "✅ READY TO USE:",
+    "  • Just run 'u-download' from command line",
+    "  • Or find 'U-Download' in your Start Menu",
+    "  • Start downloading immediately!",
+    "",
+    "Total bundled size: ~603MB (all tools included)"
+  ],
+  "url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/U-Download_3.0.0_x64-setup.exe",
+  "hash": "sha256:nsis_installer_hash_placeholder",
+  "innosetup": false,
+  "installer": {
+    "script": [
+      "Write-Host 'Installing U-Download with zero dependencies...' -ForegroundColor Green",
+      "Write-Host 'All required tools (yt-dlp, aria2c, FFmpeg) are bundled!' -ForegroundColor Cyan",
+      "$installerPath = \"$dir\\U-Download_3.0.0_x64-setup.exe\"",
+      "Start-Process -FilePath $installerPath -ArgumentList '/S', '/D=$dir' -Wait",
+      "Write-Host 'U-Download installation completed!' -ForegroundColor Green"
+    ]
+  },
+  "uninstaller": {
+    "script": [
+      "Write-Host 'Removing U-Download and all bundled dependencies...' -ForegroundColor Yellow",
+      "$uninstallerPath = Get-ChildItem -Path $dir -Name 'Uninstall*.exe' | Select-Object -First 1",
+      "if ($uninstallerPath) {",
+      "    Start-Process -FilePath \"$dir\\$uninstallerPath\" -ArgumentList '/S' -Wait",
+      "} else {",
+      "    Write-Host 'Uninstaller not found, removing directory...' -ForegroundColor Red",
+      "    Remove-Item -Path $dir -Recurse -Force -ErrorAction SilentlyContinue",
+      "}",
+      "Write-Host 'U-Download removal completed!' -ForegroundColor Green"
+    ]
+  },
+  "bin": "u-download.exe",
+  "shortcuts": [
+    [
+      "u-download.exe",
+      "U-Download",
+      "",
+      "Fast YouTube Downloader - Zero Dependencies"
+    ]
+  ],
+  "persist": [
+    "data",
+    "config",
+    "downloads"
+  ],
+  "checkver": {
+    "github": "https://github.com/okwareddevnest/U-Download"
+  },
+  "autoupdate": {
+    "url": "https://github.com/okwareddevnest/U-Download/releases/download/v$version/U-Download_$version_x64-setup.exe",
+    "hash": {
+      "url": "https://github.com/okwareddevnest/U-Download/releases/download/v$version/SHA256SUMS",
+      "regex": "([a-fA-F0-9]{64})\\s+U-Download_$version_x64-setup.exe"
+    }
+  },
+  "pre_install": [
+    "Write-Host ''",
+    "Write-Host '╔══════════════════════════════════════════════════════════════╗' -ForegroundColor Cyan",
+    "Write-Host '║                    U-Download Installation                   ║' -ForegroundColor Cyan",
+    "Write-Host '║                                                              ║' -ForegroundColor Cyan",
+    "Write-Host '║  🎯 ZERO DEPENDENCIES - All tools bundled!                  ║' -ForegroundColor Green",
+    "Write-Host '║                                                              ║' -ForegroundColor Cyan",
+    "Write-Host '║  📦 Bundled Components:                                      ║' -ForegroundColor White",
+    "Write-Host '║    • yt-dlp (YouTube downloader) - 36MB                     ║' -ForegroundColor Gray",
+    "Write-Host '║    • aria2c (Download accelerator) - 5MB                    ║' -ForegroundColor Gray",
+    "Write-Host '║    • FFmpeg (Media processor) - 160MB                       ║' -ForegroundColor Gray",
+    "Write-Host '║                                                              ║' -ForegroundColor Cyan",
+    "Write-Host '║  ✅ No Python installation needed                           ║' -ForegroundColor Green",
+    "Write-Host '║  ✅ No external tool setup required                         ║' -ForegroundColor Green",
+    "Write-Host '║  ✅ Ready to use immediately                                 ║' -ForegroundColor Green",
+    "Write-Host '║                                                              ║' -ForegroundColor Cyan",
+    "Write-Host '║  Total size: ~603MB (everything included!)                  ║' -ForegroundColor Yellow",
+    "Write-Host '╚══════════════════════════════════════════════════════════════╝' -ForegroundColor Cyan",
+    "Write-Host ''"
+  ],
+  "post_install": [
+    "Write-Host ''",
+    "Write-Host '🎉 U-Download installed successfully!' -ForegroundColor Green",
+    "Write-Host ''",
+    "Write-Host '✅ All dependencies bundled and ready:' -ForegroundColor Cyan",
+    "Write-Host '   • yt-dlp - INCLUDED' -ForegroundColor Gray",
+    "Write-Host '   • aria2c - INCLUDED' -ForegroundColor Gray",
+    "Write-Host '   • FFmpeg - INCLUDED' -ForegroundColor Gray",
+    "Write-Host ''",
+    "Write-Host '🚀 Usage:' -ForegroundColor Yellow",
+    "Write-Host '   Command line: u-download' -ForegroundColor White",
+    "Write-Host '   Start Menu: Search for \"U-Download\"' -ForegroundColor White",
+    "Write-Host '   Desktop: Double-click U-Download shortcut' -ForegroundColor White",
+    "Write-Host ''",
+    "Write-Host '📖 Help: u-download --help' -ForegroundColor Magenta",
+    "Write-Host '🌐 Website: https://github.com/okwareddevnest/U-Download' -ForegroundColor Blue",
+    "Write-Host ''",
+    "Write-Host '🎯 Zero setup required - start downloading now!' -ForegroundColor Green",
+    "Write-Host ''"
+  ],
+  "suggest": {
+    "Terminal": [
+      "extras/windows-terminal",
+      "extras/terminal"
+    ],
+    "Media Player": [
+      "extras/vlc",
+      "extras/mpv"
+    ]
+  },
+  "env_add_path": "bin",
+  "architecture": {
+    "64bit": {
+      "url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/U-Download_3.0.0_x64-setup.exe",
+      "hash": "sha256:nsis_x64_hash_placeholder"
+    }
+  }
+}

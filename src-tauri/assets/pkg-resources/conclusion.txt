@@ -1,0 +1,41 @@
+Installation Complete!
+
+U-Download has been successfully installed on your Mac.
+
+WHAT'S NEXT
+===========
+
+U-Download is now ready to use with all dependencies bundled:
+✓ No additional software installation required
+✓ No Python, yt-dlp, or FFmpeg setup needed
+✓ Ready to download immediately
+
+LAUNCHING U-DOWNLOAD
+====================
+
+You can launch U-Download in several ways:
+
+• From Applications folder: Open Finder → Applications → U-Download
+• From Launchpad: Press F4 or click Launchpad → U-Download  
+• From Spotlight: Press Cmd+Space → Type "U-Download" → Press Enter
+• From Dock: Add to Dock by dragging from Applications folder
+
+FIRST TIME USE
+==============
+
+1. Launch U-Download
+2. Paste a YouTube URL into the input field
+3. Select your preferred video/audio quality
+4. Choose download location (default: Downloads folder)
+5. Click Download to start
+
+SUPPORT
+=======
+
+• Documentation: https://github.com/okwareddevnest/U-Download/wiki
+• Report Issues: https://github.com/okwareddevnest/U-Download/issues
+• Email Support: support@u-download.app
+
+Thank you for choosing U-Download!
+
+The fastest way to download YouTube videos on macOS.

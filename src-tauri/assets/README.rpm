@@ -1,0 +1,84 @@
+U-Download - Fast Cross-Platform YouTube Downloader
+====================================================
+
+VERSION: 2.2.0
+LICENSE: MIT
+URL: https://github.com/okwareddevnest/U-Download
+
+DESCRIPTION
+-----------
+U-Download is a beautiful, cross-platform YouTube downloader with a modern graphical user interface. This application comes with ZERO external dependencies - all required tools are bundled within the application.
+
+ZERO DEPENDENCIES
+------------------
+Unlike other YouTube downloaders, U-Download includes everything needed:
+
+✓ yt-dlp (YouTube downloader) - BUNDLED
+✓ aria2c (Download accelerator) - BUNDLED  
+✓ FFmpeg (Media processor) - BUNDLED
+
+No need to:
+- Install Python
+- Install yt-dlp separately
+- Install aria2c
+- Install FFmpeg
+- Manage PATH variables
+- Deal with version conflicts
+
+FEATURES
+--------
+- Cross-platform support (Linux, macOS, Windows)
+- Modern, intuitive GUI built with Tauri
+- Multi-threaded downloads with aria2c integration
+- Video and audio format selection
+- Batch download support
+- Real-time download progress tracking
+- Automatic quality selection
+- Custom output directory selection
+
+USAGE
+-----
+Launch the application:
+  u-download
+
+Or from applications menu:
+  Applications > Multimedia > U-Download
+
+The application provides a user-friendly interface for downloading videos and audio from YouTube and other supported platforms.
+
+SYSTEM REQUIREMENTS
+-------------------
+- Linux distribution with glibc 2.17+ (RHEL 7+, CentOS 7+, Fedora 30+)
+- 512MB available disk space
+- Graphics support for GUI applications
+
+INSTALLATION VERIFICATION
+-------------------------
+After installation, verify with:
+  u-download --version
+
+SUPPORT
+-------
+- Bug reports: https://github.com/okwareddevnest/U-Download/issues
+- Documentation: https://github.com/okwareddevnest/U-Download/wiki
+- Email: support@u-download.app
+
+FILES INSTALLED
+---------------
+/usr/bin/u-download                        - Main application binary
+/usr/share/applications/u-download.desktop - Desktop entry
+/usr/share/pixmaps/u-download.png         - Application icon
+/usr/share/man/man1/u-download.1.gz       - Manual page
+/usr/share/doc/u-download/README           - This file
+
+COPYRIGHT
+---------
+Copyright (c) 2025 U-Download Team
+Licensed under the MIT License.
+
+This software includes bundled binaries:
+- yt-dlp: Licensed under Unlicense
+- aria2c: Licensed under GPL-2+
+- FFmpeg: Licensed under GPL-3+
+
+See individual component licenses for complete terms.

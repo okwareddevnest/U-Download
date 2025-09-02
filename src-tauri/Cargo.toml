@@ -1,12 +1,12 @@
 [package]
 name = "u-download"
-version = "2.2.0"
+version = "3.0.0"
 description = "Professional YouTube downloader with GUI"
 authors = ["Dedan Okware<softengde@gmail.com>"]
 edition = "2021"
 license = "MIT"
-homepage = "https://github.com/okwareddevnet/u-download"
-repository = "https://github.com/okwareddevnet/u-download"
+homepage = "https://github.com/okwareddevnest/U-Download"
+repository = "https://github.com/okwareddevnest/U-Download"
 keywords = ["youtube", "downloader", "gui", "desktop", "rust"]
 categories = ["multimedia", "gui"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
@@ -26,8 +26,17 @@ tauri = { version = "2.0", features = ["tray-icon"] }
 tauri-plugin-opener = "2.0"
 tauri-plugin-store = "2.0"
 tauri-plugin-dialog = "2.0"
+tauri-plugin-updater = "2.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
 regex = "1"
 notify-rust = "4.11"
+sha2 = "0.10"
+hmac = "0.12"
+base64 = "0.22"
+chrono = { version = "0.4", features = ["serde"] }
+rand = "0.8"
+reqwest = { version = "0.12", features = ["json", "stream"] }
+futures-util = "0.3"
+tempfile = "3.8"

@@ -1,0 +1,50 @@
+{
+  "version": "3.0.0",
+  "manifest_version": "1.0.0",
+  "generated_at": "2025-09-02T20:00:03.850Z",
+  "notes": "U-Download v3.0.0 - Enhanced with content pack system for minimal installer sizes",
+  "pub_date": "2025-09-02T20:00:03.850Z",
+  "platforms": {
+    "linux-x86_64": {
+      "signature": null,
+      "url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/U-Download_2.2.0_amd64.deb",
+      "size": 9759952,
+      "sha256": "2cebcc1df84e341e198085ba73108d37c35dbe7f5b45374f23323f8979d60e6e",
+      "version": "3.0.0",
+      "name": "U-Download_2.2.0_amd64.deb",
+      "type": "deb",
+      "alternatives": [
+        {
+          "name": "U-Download_3.0.0_amd64.deb",
+          "url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/U-Download_3.0.0_amd64.deb",
+          "size": 9760500,
+          "sha256": "7db720e36308c031a5efd5e6d1db7a2db95cd08a425ff5c88812cb4ebc4b73fc",
+          "signature": null,
+          "type": "deb"
+        }
+      ],
+      "delta": {
+        "from_version": "2.2.0",
+        "to_version": "3.0.0",
+        "available": false,
+        "reason": "Delta generation not yet implemented",
+        "estimated_size_reduction": "60-80%"
+      },
+      "content_packs_required": true,
+      "content_manifest_url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/content_manifest.json",
+      "update_type": "incremental",
+      "release_notes_url": "https://github.com/okwareddevnest/U-Download/releases/tag/v3.0.0",
+      "critical": false
+    }
+  },
+  "content_pack_updates": {
+    "available": true,
+    "check_url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/content_manifest.json",
+    "description": "Content packs can be updated independently of the main application"
+  },
+  "rollback": {
+    "supported": true,
+    "previous_version": "2.2.0",
+    "rollback_notes": "If issues occur, you can roll back to the previous version"
+  }
+}

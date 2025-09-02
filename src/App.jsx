@@ -3,6 +3,7 @@ import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import VideoPreview from "./VideoPreview";
+import ContentDownloadModal from "./ContentDownloadModal";
 import soundNotifications from "./SoundNotifications";
 import "./App.css";
 
@@ -28,6 +29,11 @@ function App() {
   const [trimEndTime, setTrimEndTime] = useState(null);
   const [isTrimMode, setIsTrimMode] = useState(false);
 
+  // Content download state
+  const [showContentModal, setShowContentModal] = useState(false);
+  const [contentRequired, setContentRequired] = useState(false);
+  const [hasCheckedContent, setHasCheckedContent] = useState(false);
+
   useEffect(() => {
     localStorage.setItem("isDarkMode", JSON.stringify(isDarkMode));
   }, [isDarkMode]);
@@ -51,6 +57,40 @@ function App() {
       }
     })();
   }, []);
+
+  // Check content status on app startup
+  useEffect(() => {
+    const checkContentStatus = async () => {
+      if (hasCheckedContent) return;
+      
+      try {
+        const status = await invoke('check_content_status');
+        const requiredPacks = status.compatible_packs?.filter(pack => pack.required) || [];
+        const installationStatus = status.installation_status || {};
+        
+        // Check if any required pack is not installed
+        const missingRequired = requiredPacks.some(pack => 
+          installationStatus[pack.id] !== 'installed'
+        );
+        
+        setContentRequired(missingRequired);
+        
+        // Show modal if content is required and not installed
+        if (missingRequired) {
+          setShowContentModal(true);
+        }
+        
+        setHasCheckedContent(true);
+      } catch (error) {
+        console.error('Failed to check content status:', error);
+        setHasCheckedContent(true);
+      }
+    };
+
+    // Only check content status after a short delay to ensure app is ready
+    const timer = setTimeout(checkContentStatus, 1000);
+    return () => clearTimeout(timer);
+  }, [hasCheckedContent]);
 
   useEffect(() => {
     const savedFolder = localStorage.getItem("outputFolder");
@@ -694,6 +734,16 @@ function App() {
           </div>
         </div>
       </div>
+
+      {/* Content Download Modal */}
+      <ContentDownloadModal
+        isOpen={showContentModal}
+        onClose={() => setShowContentModal(false)}
+        onComplete={() => {
+          setContentRequired(false);
+          setShowContentModal(false);
+        }}
+      />
     </div>
   );
 }

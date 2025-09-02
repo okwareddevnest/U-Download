@@ -1,0 +1,87 @@
+{
+  "version": "1.0.0",
+  "generated_at": "2025-09-02T20:00:21.559Z",
+  "app_version": "3.0.0",
+  "content_packs": [
+    {
+      "id": "core-binaries",
+      "name": "Core Binaries Pack",
+      "description": "Essential binaries (yt-dlp, aria2c, ffmpeg) required for U-Download functionality",
+      "version": "3.0.0",
+      "required": true,
+      "platforms": [
+        {
+          "id": "linux-x64",
+          "name": "Linux (x64)",
+          "download_url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/u-download-content-linux-x64-3.0.0.tar.gz",
+          "compressed_size": 24548690,
+          "sha256": "65d6c1b90714d238e3c2e77339072d3debd705496100c06eb4e585446f489750",
+          "format": "tar.gz",
+          "signature": null
+        },
+        {
+          "id": "linux-arm64",
+          "name": "Linux (ARM64)",
+          "download_url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/u-download-content-linux-arm64-3.0.0.tar.gz",
+          "compressed_size": 24548690,
+          "sha256": "1e6b7fd568e62d8008da859dfde887f21edacc6e8f8336e797ecc6e961bf319a",
+          "format": "tar.gz",
+          "signature": null
+        },
+        {
+          "id": "windows-x64",
+          "name": "Windows (x64)",
+          "download_url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/u-download-content-windows-x64-3.0.0.zip",
+          "compressed_size": 136968497,
+          "sha256": "8cb4f4c2994028d2b48f471b5a778f3361bf1a85920208b2bb51aae705a7ab81",
+          "format": "zip",
+          "signature": null
+        },
+        {
+          "id": "macos-x64",
+          "name": "macOS (Intel)",
+          "download_url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/u-download-content-macos-x64-3.0.0.tar.gz",
+          "compressed_size": 75316228,
+          "sha256": "adffb839e1cfbd5b811ee07aa81e7697e3d4b556e69c21c314b189de83a5de00",
+          "format": "tar.gz",
+          "signature": null
+        },
+        {
+          "id": "macos-arm64",
+          "name": "macOS (Apple Silicon)",
+          "download_url": "https://github.com/okwareddevnest/U-Download/releases/download/v3.0.0/u-download-content-macos-arm64-3.0.0.tar.gz",
+          "compressed_size": 75316228,
+          "sha256": "7e676443bdd63ace952346ccb906e013dec29f0b65ec0c46730b35b6317d336e",
+          "format": "tar.gz",
+          "signature": null
+        }
+      ],
+      "total_size": 195669282,
+      "files": [
+        {
+          "path": "yt-dlp",
+          "size": 37377224,
+          "sha256": "546ed7fa4649f95831a8fe39edeecb1ea1462d44167b1c2cbef674abb9164fd0",
+          "executable": true,
+          "file_type": "binary"
+        },
+        {
+          "path": "aria2c",
+          "size": 14664,
+          "sha256": "83d9e12159854955b1a1851b7288b14169502132c1930eb1ec4a99af052cb8f4",
+          "executable": true,
+          "file_type": "binary"
+        },
+        {
+          "path": "ffmpeg",
+          "size": 375328,
+          "sha256": "7e7a0354fdac7b5d0f3c39cb438018fe5798c21a32fe326c51e8937c03f92df9",
+          "executable": true,
+          "file_type": "binary"
+        }
+      ],
+      "dependencies": []
+    }
+  ],
+  "signature": null
+}

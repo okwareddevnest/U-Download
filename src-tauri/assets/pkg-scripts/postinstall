@@ -1,0 +1,61 @@
+#!/bin/bash
+
+# Post-installation script for U-Download macOS .pkg installer
+# This script runs after the application has been copied to /Applications
+
+set -e
+
+APP_PATH="/Applications/U-Download.app"
+LOG_FILE="/tmp/u-download-install.log"
+
+log() {
+    echo "$(date): $1" >> "$LOG_FILE"
+    echo "$1"
+}
+
+log "Starting U-Download post-installation setup..."
+
+# Ensure the application exists
+if [ ! -d "$APP_PATH" ]; then
+    log "ERROR: U-Download.app not found in Applications folder"
+    exit 1
+fi
+
+# Set proper permissions for the application bundle
+log "Setting application permissions..."
+chmod -R 755 "$APP_PATH"
+chown -R root:admin "$APP_PATH"
+
+# Remove quarantine attribute to avoid Gatekeeper issues
+log "Removing quarantine attributes..."
+xattr -dr com.apple.quarantine "$APP_PATH" 2>/dev/null || true
+
+# Create a symlink in /usr/local/bin for command-line access (optional)
+if [ -d "/usr/local/bin" ]; then
+    log "Creating command-line symlink..."
+    ln -sf "$APP_PATH/Contents/MacOS/u-download" "/usr/local/bin/u-download" 2>/dev/null || true
+fi
+
+# Touch the app to update its modification date
+touch "$APP_PATH"
+
+# Clear Launch Services database to ensure proper app registration  
+/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$APP_PATH"
+
+# Update Spotlight index
+if command -v mdimport >/dev/null 2>&1; then
+    log "Updating Spotlight index..."
+    mdimport "$APP_PATH" 2>/dev/null || true
+fi
+
+# Create application support directory in user space (will be created on first run)
+# This is mainly for future use and ensuring proper setup
+
+log "Post-installation setup completed successfully!"
+log "U-Download is ready to use with zero external dependencies."
+log "All required tools (yt-dlp, aria2c, FFmpeg) are bundled within the application."
+
+# Optional: Show installation success notification
+osascript -e 'display notification "U-Download has been installed successfully and is ready to use!" with title "Installation Complete"' 2>/dev/null || true
+
+exit 0

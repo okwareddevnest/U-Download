@@ -1,0 +1,68 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>u-download</id>
+    <version>2.2.0</version>
+    <packageSourceUrl>https://github.com/okwareddevnest/U-Download</packageSourceUrl>
+    <owners>okwareddevnet</owners>
+    <title>U-Download</title>
+    <authors>Dedan Okware</authors>
+    <projectUrl>https://github.com/okwareddevnest/U-Download</projectUrl>
+    <iconUrl>https://raw.githubusercontent.com/okwareddevnet/u-download/main/src-tauri/icons/icon.png</iconUrl>
+    <copyright>Copyright © 2025 U-Download. All rights reserved.</copyright>
+    <licenseUrl>https://github.com/okwareddevnest/U-Download/blob/main/LICENSE</licenseUrl>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <projectSourceUrl>https://github.com/okwareddevnest/U-Download</projectSourceUrl>
+    <docsUrl>https://github.com/okwareddevnest/U-Download/blob/main/README.md</docsUrl>
+    <bugTrackerUrl>https://github.com/okwareddevnest/U-Download/issues</bugTrackerUrl>
+    <tags>youtube downloader video audio gui desktop cross-platform</tags>
+    <summary>Fast, cross-platform YouTube downloader with GUI - No dependencies required</summary>
+    <description><![CDATA[
+# U-Download
+
+Fast, cross-platform YouTube downloader with beautiful GUI interface.
+
+## Features
+
+- **Zero Dependencies**: All required tools (yt-dlp, aria2c, ffmpeg) are bundled - no separate installation needed
+- **High-Speed Downloads**: Uses aria2c for multi-connection downloading
+- **Format Selection**: Download video, audio, or both in various quality options
+- **Video Trimming**: Built-in video trimming with precise time controls
+- **Cross-Platform**: Works on Windows, macOS, and Linux
+- **Beautiful GUI**: Modern, intuitive interface built with Tauri and React
+- **Progress Tracking**: Real-time download progress with detailed information
+- **System Notifications**: Get notified when downloads complete
+
+## Installation
+
+This Chocolatey package installs U-Download with all dependencies bundled. No additional software installation required.
+
+## Usage
+
+After installation, run `u-download` from command line or find "U-Download" in your Start Menu.
+
+## What's Included
+
+- U-Download application
+- Bundled yt-dlp (latest version)
+- Bundled aria2c for fast downloads  
+- Bundled FFmpeg for video processing
+- Desktop shortcuts and Start Menu entries
+
+## Zero Setup Required
+
+Unlike other YouTube downloaders, U-Download comes with everything needed to work immediately. No need to:
+- Install Python
+- Install yt-dlp separately
+- Install aria2c
+- Install FFmpeg
+- Configure paths or dependencies
+
+Just install and use!
+]]></description>
+    <releaseNotes>https://github.com/okwareddevnest/U-Download/releases/tag/v3.0.0</releaseNotes>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

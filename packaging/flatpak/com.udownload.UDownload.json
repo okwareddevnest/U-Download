@@ -1,0 +1,71 @@
+{
+    "app-id": "com.udownload.UDownload",
+    "runtime": "org.freedesktop.Platform",
+    "runtime-version": "23.08",
+    "sdk": "org.freedesktop.Sdk",
+    "command": "u-download",
+    "finish-args": [
+        "--share=ipc",
+        "--socket=fallback-x11",
+        "--socket=wayland",
+        "--device=dri",
+        "--share=network",
+        "--filesystem=home:rw",
+        "--filesystem=xdg-download:rw",
+        "--talk-name=org.freedesktop.Notifications",
+        "--talk-name=org.freedesktop.FileManager1",
+        "--env=GTK_USE_PORTAL=1"
+    ],
+    "modules": [
+        {
+            "name": "u-download",
+            "buildsystem": "simple",
+            "build-commands": [
+                "install -Dm755 u-download /app/bin/u-download",
+                "install -Dm644 com.udownload.UDownload.desktop /app/share/applications/com.udownload.UDownload.desktop",
+                "install -Dm644 icon-512.png /app/share/icons/hicolor/512x512/apps/com.udownload.UDownload.png",
+                "install -Dm644 icon-256.png /app/share/icons/hicolor/256x256/apps/com.udownload.UDownload.png",
+                "install -Dm644 icon-128.png /app/share/icons/hicolor/128x128/apps/com.udownload.UDownload.png",
+                "install -Dm644 icon-64.png /app/share/icons/hicolor/64x64/apps/com.udownload.UDownload.png",
+                "install -Dm644 icon-32.png /app/share/icons/hicolor/32x32/apps/com.udownload.UDownload.png",
+                "install -Dm644 com.udownload.UDownload.appdata.xml /app/share/metainfo/com.udownload.UDownload.appdata.xml"
+            ],
+            "sources": [
+                {
+                    "type": "archive",
+                    "url": "https://github.com/okwareddevnest/U-Download/releases/download/v2.2.0/u-download_2.2.0_linux_x86_64.tar.gz",
+                    "sha256": "sha256_placeholder",
+                    "strip-components": 0
+                },
+                {
+                    "type": "file",
+                    "path": "com.udownload.UDownload.desktop"
+                },
+                {
+                    "type": "file",
+                    "path": "com.udownload.UDownload.appdata.xml"
+                },
+                {
+                    "type": "file",
+                    "path": "icon-512.png"
+                },
+                {
+                    "type": "file", 
+                    "path": "icon-256.png"
+                },
+                {
+                    "type": "file",
+                    "path": "icon-128.png"
+                },
+                {
+                    "type": "file",
+                    "path": "icon-64.png"
+                },
+                {
+                    "type": "file",
+                    "path": "icon-32.png"
+                }
+            ]
+        }
+    ]
+}

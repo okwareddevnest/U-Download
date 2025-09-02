@@ -1,0 +1,89 @@
+name: u-download
+version: '2.2.0'
+summary: Fast, cross-platform YouTube downloader with GUI
+description: |
+  U-Download is a beautiful, cross-platform YouTube downloader with all 
+  dependencies bundled for zero-setup installation.
+
+  **Key Features:**
+  
+  ✅ **ZERO DEPENDENCIES** - All required tools (yt-dlp, aria2c, FFmpeg) are bundled
+  
+  ✅ **HIGH-SPEED DOWNLOADS** - Uses aria2c for multi-connection downloading
+  
+  ✅ **FORMAT SELECTION** - Download video, audio, or both in various qualities
+  
+  ✅ **VIDEO TRIMMING** - Built-in video trimming with precise time controls
+  
+  ✅ **MODERN GUI** - Beautiful interface built with Tauri and React
+  
+  ✅ **PROGRESS TRACKING** - Real-time download progress with detailed information
+  
+  ✅ **CROSS-PLATFORM** - Works on Windows, macOS, and Linux
+  
+  **No Setup Required:**
+  Unlike other YouTube downloaders, U-Download comes with everything needed:
+  - No need to install Python
+  - No need to install yt-dlp separately  
+  - No need to install aria2c
+  - No need to install FFmpeg
+  - No configuration required
+  
+  Just install and use immediately!
+
+grade: stable
+confinement: strict
+base: core22
+license: MIT
+
+architectures:
+  - build-on: amd64
+  - build-on: arm64
+
+apps:
+  u-download:
+    command: usr/bin/u-download
+    desktop: usr/share/applications/u-download.desktop
+    extensions: [gnome]
+    plugs:
+      - home
+      - network
+      - network-bind
+      - desktop
+      - desktop-legacy
+      - x11
+      - wayland
+      - opengl
+      - audio-playback
+      - removable-media
+      - gsettings
+    environment:
+      DISABLE_WAYLAND: 1
+
+parts:
+  u-download:
+    plugin: dump
+    source: https://github.com/okwareddevnest/U-Download/releases/download/v2.2.0/u-download_2.2.0_amd64.tar.gz
+    source-checksum: sha256/checksum_placeholder
+    stage-packages:
+      - libgtk-3-0
+      - libglib2.0-0
+      - libcairo-gobject2
+      - libcairo2
+      - libgdk-pixbuf-2.0-0
+      - libpango-1.0-0
+      - libatk1.0-0
+      - libwebkit2gtk-4.0-37
+      - libjavascriptcoregtk-4.0-18
+    override-prime: |
+      craftctl default
+      # Ensure the binary is executable
+      chmod +x $CRAFT_PRIME/usr/bin/u-download
+      
+  desktop-file:
+    plugin: dump
+    source: src-tauri/assets/
+    organize:
+      u-download.desktop: usr/share/applications/u-download.desktop
+    stage:
+      - usr/share/applications/u-download.desktop

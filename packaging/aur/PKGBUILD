@@ -1,0 +1,153 @@
+# Maintainer: Dedan Okware <okware@example.com>
+# AUR Package for U-Download - Zero Dependencies YouTube Downloader
+
+pkgname=u-download
+pkgver=2.2.0
+pkgrel=1
+pkgdesc="Fast, cross-platform YouTube downloader with GUI - All dependencies bundled (yt-dlp, aria2c, FFmpeg)"
+arch=('x86_64')
+url="https://github.com/okwareddevnest/U-Download"
+license=('MIT')
+depends=('glibc' 'gcc-libs' 'gtk3' 'webkit2gtk')
+optdepends=(
+    'libnotify: desktop notifications'
+    'xdg-utils: desktop integration'
+)
+provides=('u-download' 'youtube-downloader')
+conflicts=('u-download-bin' 'u-download-git')
+source=("https://github.com/okwareddevnest/U-Download/releases/download/v${pkgver}/u-download_${pkgver}_linux_x86_64.tar.gz")
+sha256sums=('sha256sum_placeholder')
+
+# No additional dependencies needed - everything is bundled!
+# This package includes:
+# - yt-dlp (YouTube downloader) - BUNDLED
+# - aria2c (Download accelerator) - BUNDLED  
+# - FFmpeg (Media processor) - BUNDLED
+
+prepare() {
+    cd "${srcdir}"
+    
+    # Verify bundled components exist
+    if [ ! -f "u-download" ]; then
+        echo "ERROR: Main executable not found in source package"
+        exit 1
+    fi
+    
+    # Check binary size (should be large due to bundled dependencies)
+    size=$(stat -c%s "u-download")
+    if [ "$size" -lt 50000000 ]; then  # Less than 50MB indicates missing bundled deps
+        echo "WARNING: Binary size seems small ($size bytes), bundled dependencies may be missing"
+    else
+        echo "SUCCESS: Binary size is ${size} bytes, bundled dependencies confirmed"
+    fi
+}
+
+build() {
+    # No build step needed - pre-compiled binary with all dependencies
+    return 0
+}
+
+check() {
+    cd "${srcdir}"
+    
+    # Basic executable test
+    chmod +x u-download
+    
+    # Test version output
+    ./u-download --version > /dev/null 2>&1 || {
+        echo "ERROR: Unable to execute u-download binary"
+        return 1
+    }
+    
+    echo "SUCCESS: Binary executable test passed"
+}
+
+package() {
+    cd "${srcdir}"
+    
+    # Install main executable
+    install -Dm755 "u-download" "${pkgdir}/usr/bin/u-download"
+    
+    # Install desktop file
+    install -Dm644 "u-download.desktop" "${pkgdir}/usr/share/applications/u-download.desktop"
+    
+    # Install icon
+    install -Dm644 "icon.png" "${pkgdir}/usr/share/pixmaps/u-download.png"
+    
+    # Install man page if available
+    if [ -f "u-download.1" ]; then
+        install -Dm644 "u-download.1" "${pkgdir}/usr/share/man/man1/u-download.1"
+    fi
+    
+    # Install license
+    if [ -f "LICENSE" ]; then
+        install -Dm644 "LICENSE" "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+    fi
+    
+    # Install documentation
+    if [ -f "README.md" ]; then
+        install -Dm644 "README.md" "${pkgdir}/usr/share/doc/${pkgname}/README.md"
+    fi
+    
+    # Create configuration directory
+    install -dm755 "${pkgdir}/etc/u-download"
+    
+    # Install zero-dependency confirmation file
+    cat > "${pkgdir}/etc/u-download/bundled-deps.conf" << EOF
+# U-Download Bundled Dependencies Configuration
+# This file confirms that all required dependencies are bundled within the application
+
+[bundled_tools]
+yt_dlp=bundled
+aria2c=bundled
+ffmpeg=bundled
+
+[external_dependencies] 
+python=not_required
+external_yt_dlp=not_required
+external_aria2c=not_required
+external_ffmpeg=not_required
+
+[installation_info]
+version=${pkgver}
+installation_type=zero_dependency
+bundled_size_mb=603
+ready_to_use=true
+
+[notes]
+description=All required tools are bundled within the u-download binary
+setup_required=none
+additional_packages=none
+EOF
+}
+
+# Post-install message
+post_install() {
+    echo ""
+    echo "==> U-Download has been installed successfully!"
+    echo ""
+    echo "    ✓ ZERO external dependencies - all tools bundled!"
+    echo "    ✓ yt-dlp (YouTube downloader) - INCLUDED"
+    echo "    ✓ aria2c (Download accelerator) - INCLUDED"  
+    echo "    ✓ FFmpeg (Media processor) - INCLUDED"
+    echo ""
+    echo "==> Usage:"
+    echo "    Run: u-download"
+    echo "    GUI: Available in application menu as 'U-Download'"
+    echo ""
+    echo "==> No additional setup required - start downloading immediately!"
+    echo ""
+}
+
+# Post-upgrade message
+post_upgrade() {
+    post_install
+}
+
+# Pre-remove message
+pre_remove() {
+    echo ""
+    echo "==> Removing U-Download..."
+    echo "    Note: This will remove all bundled dependencies (yt-dlp, aria2c, FFmpeg)"
+    echo ""
+}

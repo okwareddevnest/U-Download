@@ -1,0 +1,35 @@
+Welcome to U-Download Installer
+
+U-Download is a fast, cross-platform YouTube downloader with a beautiful graphical interface.
+
+ZERO EXTERNAL DEPENDENCIES
+===========================
+
+This installer includes everything you need:
+• yt-dlp (YouTube downloader) - BUNDLED ✓
+• aria2c (Download accelerator) - BUNDLED ✓  
+• FFmpeg (Media processor) - BUNDLED ✓
+
+Unlike other YouTube downloaders, U-Download works immediately after installation with no additional setup required.
+
+FEATURES
+========
+
+• Beautiful, native macOS interface
+• Multi-threaded downloads for maximum speed
+• Support for video and audio downloads
+• Batch download capabilities
+• Real-time progress tracking
+• Custom output directory selection
+• Support for multiple video platforms
+
+SYSTEM REQUIREMENTS
+==================
+
+• macOS 10.15 (Catalina) or later
+• 500MB available disk space
+• Internet connection for downloads
+
+This installer will place U-Download in your Applications folder and make it available from Launchpad and Spotlight.
+
+Click Continue to proceed with the installation.

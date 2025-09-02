@@ -1,0 +1,23 @@
+{
+  "version": "v2.2.0",
+  "notes": "### U-Download v2.2.0 - Zero Dependencies Release\n\n🎯 **Complete Zero-Dependency Implementation**\n- All binaries (yt-dlp, aria2c, ffmpeg) now bundled (603MB)\n- No external dependencies required\n- Ready to use immediately after installation\n\n✨ **New Features**\n- Enhanced cross-platform installation support\n- Comprehensive package manager integration (8 platforms)\n- Improved auto-updater functionality\n- Better error handling and progress tracking\n\n🔧 **Bundled Components**\n- **yt-dlp** v2023.12.30 (YouTube downloader) - 36MB\n- **aria2c** v1.37.0 (Download accelerator) - 5MB\n- **FFmpeg** v6.1 (Media processor) - 160MB\n\n🏗️ **Installation Improvements**\n- Linux: .deb, .rpm, AppImage, portable versions\n- macOS: .dmg, .pkg, Mac App Store preparation\n- Windows: NSIS .exe, MSI, portable versions\n\n📦 **Package Manager Support**\n- Homebrew (macOS), Chocolatey/Winget/Scoop (Windows)\n- Snap/Flatpak/AUR/Nix (Linux)\n- All with zero-dependency messaging\n\n🛠️ **Technical Improvements**\n- Enhanced binary management system\n- Platform-specific conditional compilation\n- Improved error handling and logging\n- Better resource management\n\n---\n**Zero Setup Required** - No Python, yt-dlp, aria2c, or FFmpeg installation needed!",
+  "pub_date": "2025-01-15T12:00:00Z",
+  "platforms": {
+    "darwin-x86_64": {
+      "signature": "signature_placeholder_darwin_x64",
+      "url": "https://github.com/okwareddevnest/U-Download/releases/download/v2.2.0/u-download_2.2.0_darwin_x64.tar.gz"
+    },
+    "darwin-aarch64": {
+      "signature": "signature_placeholder_darwin_arm64",
+      "url": "https://github.com/okwareddevnest/U-Download/releases/download/v2.2.0/u-download_2.2.0_darwin_arm64.tar.gz"
+    },
+    "linux-x86_64": {
+      "signature": "signature_placeholder_linux_x64",
+      "url": "https://github.com/okwareddevnest/U-Download/releases/download/v2.2.0/u-download_2.2.0_linux_x86_64.AppImage"
+    },
+    "windows-x86_64": {
+      "signature": "signature_placeholder_windows_x64",
+      "url": "https://github.com/okwareddevnest/U-Download/releases/download/v2.2.0/U-Download_2.2.0_x64_en-US.msi"
+    }
+  }
+}

@@ -1,0 +1,107 @@
+.TH U-DOWNLOAD 1 "January 2025" "u-download 2.2.0" "User Commands"
+.SH NAME
+u-download \- Fast cross-platform YouTube downloader with GUI
+
+.SH SYNOPSIS
+.B u-download
+[\fIOPTIONS\fR]
+[\fIURL\fR]
+
+.SH DESCRIPTION
+U-Download is a beautiful, cross-platform YouTube downloader with a graphical user interface. It comes with all required dependencies bundled, including yt-dlp, aria2c, and FFmpeg, so no additional software installation is required.
+
+The application provides a user-friendly interface for downloading videos and audio from YouTube and other supported platforms with maximum speed and reliability.
+
+.SH OPTIONS
+.TP
+.BR \-h ", " \-\-help
+Show help message and exit.
+
+.TP
+.BR \-v ", " \-\-version
+Show version information and exit.
+
+.TP
+.BR URL
+Open the application with the specified URL pre-loaded for download.
+
+.SH FEATURES
+.IP \(bu 4
+Zero external dependencies - all tools bundled
+.IP \(bu 4
+Cross-platform support (Linux, macOS, Windows)
+.IP \(bu 4
+Multi-threaded downloads with aria2c integration
+.IP \(bu 4
+Video and audio format selection
+.IP \(bu 4
+Batch download support
+.IP \(bu 4
+Download progress tracking
+.IP \(bu 4
+Modern, intuitive user interface
+
+.SH BUNDLED COMPONENTS
+U-Download includes the following bundled tools:
+.IP \(bu 4
+.B yt-dlp
+\- YouTube and media downloader
+.IP \(bu 4
+.B aria2c
+\- Multi-connection download accelerator
+.IP \(bu 4
+.B FFmpeg
+\- Media processing and conversion
+
+.SH FILES
+.TP
+.I ~/.config/u-download/
+User configuration directory
+
+.TP
+.I ~/.cache/u-download/
+Temporary files and download cache
+
+.TP
+.I ~/Downloads/
+Default download directory
+
+.SH EXAMPLES
+.TP
+Launch the application:
+.B u-download
+
+.TP
+Launch with a URL pre-loaded:
+.B u-download "https://www.youtube.com/watch?v=dQw4w9WgXcQ"
+
+.SH EXIT STATUS
+.TP
+0
+Success
+
+.TP
+1
+General error
+
+.TP
+2
+Invalid arguments
+
+.SH BUGS
+Report bugs at: https://github.com/okwareddevnest/U-Download/issues
+
+.SH AUTHORS
+U-Download Team <support@u-download.app>
+
+.SH COPYRIGHT
+Copyright \(co 2025 U-Download Team. Licensed under the MIT License.
+This is free software; you are free to change and redistribute it.
+There is NO WARRANTY, to the extent permitted by law.
+
+.SH SEE ALSO
+.BR yt-dlp (1),
+.BR aria2c (1),
+.BR ffmpeg (1)
+
+For more information, visit: https://github.com/okwareddevnest/U-Download
