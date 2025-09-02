@@ -275,20 +275,20 @@ async fn start_download(
     window: Window,
     progress_state: State<'_, ProgressState>,
     url: String,
-    downloadType: String,
+    download_type: String,
     quality: String,
-    outputFolder: String,
-    startTime: Option<f64>,
-    endTime: Option<f64>,
+    output_folder: String,
+    start_time: Option<f64>,
+    end_time: Option<f64>,
 ) -> Result<(), String> {
     let window_clone = window.clone();
     let progress_arc = progress_state.inner().clone();
     let url_clone = url.clone();
-    let download_type_clone = downloadType.clone();
+    let download_type_clone = download_type.clone();
     let quality_clone = quality.clone();
-    let output_folder_clone = outputFolder.clone();
-    let start_time_clone = startTime;
-    let end_time_clone = endTime;
+    let output_folder_clone = output_folder.clone();
+    let start_time_clone = start_time;
+    let end_time_clone = end_time;
 
     tokio::spawn(async move {
         let result = perform_download(
