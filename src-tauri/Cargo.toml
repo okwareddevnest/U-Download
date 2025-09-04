@@ -1,6 +1,6 @@
 [package]
 name = "u-download"
-version = "2.2.0"
+version = "2.2.2"
 description = "Professional YouTube downloader with GUI"
 authors = ["Dedan Okware<softengde@gmail.com>"]
 edition = "2021"
