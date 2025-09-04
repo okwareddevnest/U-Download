@@ -48,7 +48,9 @@
       "icons/icon.ico",
       "icons/icon.png"
     ],
-    "resources": [],
+    "resources": [
+      "binaries/**/*"
+    ],
     "externalBin": [],
     "copyright": "Copyright © 2025 U-Download. All rights reserved.",
     "category": "Utility",
@@ -66,10 +68,7 @@
     },
     "linux": {
       "deb": {
-        "depends": [
-          "yt-dlp",
-          "aria2"
-        ],
+        "depends": [],
         "section": "video",
         "priority": "optional"
       }

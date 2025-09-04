@@ -173,7 +173,7 @@ function App() {
       try {
         await invoke("check_ffmpeg");
       } catch (error) {
-        alert(`FFmpeg is required for video trimming but is not installed.\n\nPlease install FFmpeg:\n• Ubuntu/Debian: sudo apt install ffmpeg\n• macOS: brew install ffmpeg\n• Windows: Download from ffmpeg.org\n\nError: ${error}`);
+        alert(`FFmpeg (bundled) is required for video trimming but was not found.\n\nThis indicates a damaged or incomplete installation.\nPlease reinstall U-Download or download the full installer.\n\nDetails: ${error}`);
         return;
       }
 
@@ -231,7 +231,7 @@ function App() {
         const ffmpeg = await invoke("check_ffmpeg");
         ffmpegResult = `\n\n${ffmpeg}`;
       } catch (error) {
-        ffmpegResult = `\n\n❌ FFmpeg: Not found (${error})`;
+        ffmpegResult = `\n\n❌ FFmpeg: Bundled binary not found (${error})`;
       }
 
       alert(`Dependencies Check:\n\n${result}${ffmpegResult}`);

@@ -9,6 +9,8 @@ use tauri::{AppHandle, Emitter, State, Window};
 use tauri_plugin_dialog::DialogExt;
 use notify_rust::Notification;
 
+mod binary_manager;
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 struct DownloadProgress {
     percentage: f64,
@@ -180,17 +182,12 @@ fn send_download_started_notification(filename: &str) -> Result<(), String> {
 }
 
 #[tauri::command]
-async fn get_video_metadata(url: String) -> Result<VideoMetadata, String> {
-    // Test if yt-dlp is available
-    match Command::new("yt-dlp").arg("--version").output() {
-        Ok(_) => {}
-        Err(e) => {
-            return Err(format!("yt-dlp not found: {}. Please install yt-dlp.", e));
-        }
-    }
+async fn get_video_metadata(app_handle: AppHandle, url: String) -> Result<VideoMetadata, String> {
+    let paths = binary_manager::resolve_paths(&app_handle)?;
+    binary_manager::ensure_executable(&paths)?;
 
-    // Get video information using yt-dlp --dump-json
-    let output = Command::new("yt-dlp")
+    // Get video information using bundled yt-dlp --dump-json
+    let output = Command::new(&paths.yt_dlp)
         .arg("--dump-json")
         .arg("--no-download")
         .arg(&url)
@@ -235,8 +232,11 @@ async fn get_video_metadata(url: String) -> Result<VideoMetadata, String> {
 }
 
 #[tauri::command]
-async fn check_ffmpeg() -> Result<String, String> {
-    match Command::new("ffmpeg").arg("-version").output() {
+async fn check_ffmpeg(app_handle: AppHandle) -> Result<String, String> {
+    let paths = binary_manager::resolve_paths(&app_handle)?;
+    binary_manager::ensure_executable(&paths)?;
+
+    match Command::new(&paths.ffmpeg).arg("-version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             Ok(format!(
@@ -244,10 +244,7 @@ async fn check_ffmpeg() -> Result<String, String> {
                 version.lines().next().unwrap_or("unknown")
             ))
         }
-        Err(e) => Err(format!(
-            "❌ FFmpeg: Not found ({}). Please install with: sudo apt install ffmpeg",
-            e
-        )),
+        Err(e) => Err(format!("❌ FFmpeg: Bundled binary not found or not executable ({})", e)),
     }
 }
 
@@ -331,22 +328,24 @@ async fn start_download(
 }
 
 #[tauri::command]
-async fn test_dependencies() -> Result<String, String> {
+async fn test_dependencies(app_handle: AppHandle) -> Result<String, String> {
+    let paths = binary_manager::resolve_paths(&app_handle)?;
+    binary_manager::ensure_executable(&paths)?;
     let mut results = Vec::new();
 
-    // Test yt-dlp
-    match Command::new("yt-dlp").arg("--version").output() {
+    // Test yt-dlp (bundled)
+    match Command::new(&paths.yt_dlp).arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             results.push(format!("✅ yt-dlp: {}", version.trim()));
         }
         Err(e) => {
-            results.push(format!("❌ yt-dlp: Not found ({})", e));
+            results.push(format!("❌ yt-dlp: Bundled binary error ({})", e));
         }
     }
 
-    // Test aria2c
-    match Command::new("aria2c").arg("--version").output() {
+    // Test aria2c (bundled)
+    match Command::new(&paths.aria2c).arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             results.push(format!(
@@ -355,7 +354,7 @@ async fn test_dependencies() -> Result<String, String> {
             ));
         }
         Err(e) => {
-            results.push(format!("❌ aria2c: Not found ({})", e));
+            results.push(format!("❌ aria2c: Bundled binary error ({})", e));
         }
     }
 
@@ -372,19 +371,24 @@ async fn perform_download(
     start_time: Option<f64>,
     end_time: Option<f64>,
 ) -> Result<String, String> {
+    // Resolve bundled binaries
+    let app_handle = window.app_handle();
+    let paths = binary_manager::resolve_paths(&app_handle)?;
+    binary_manager::ensure_executable(&paths)?;
+
     // First, test if yt-dlp is available
-    match Command::new("yt-dlp").arg("--version").output() {
+    match Command::new(&paths.yt_dlp).arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             eprintln!("yt-dlp version: {}", version.trim());
         }
         Err(e) => {
-            return Err(format!("yt-dlp not found or not executable: {}. Please install with: sudo apt install yt-dlp", e));
+            return Err(format!("Bundled yt-dlp not found or not executable: {}", e));
         }
     }
 
     // Test if aria2c is available
-    match Command::new("aria2c").arg("--version").output() {
+    match Command::new(&paths.aria2c).arg("--version").output() {
         Ok(output) => {
             let version = String::from_utf8_lossy(&output.stdout);
             eprintln!(
@@ -393,24 +397,26 @@ async fn perform_download(
             );
         }
         Err(e) => {
-            return Err(format!("aria2c not found or not executable: {}. Please install with: sudo apt install aria2", e));
+            return Err(format!("Bundled aria2c not found or not executable: {}", e));
         }
     }
 
     // Check if FFmpeg is available for trimming
     let trimming_enabled = start_time.is_some() || end_time.is_some();
     if trimming_enabled {
-        match Command::new("ffmpeg").arg("-version").output() {
+        match Command::new(&paths.ffmpeg).arg("-version").output() {
             Ok(_) => {
                 eprintln!("FFmpeg is available for trimming");
             }
             Err(e) => {
-                return Err(format!("FFmpeg not found or not executable: {}. Please install with: sudo apt install ffmpeg", e));
+                return Err(format!("Bundled FFmpeg not found or not executable: {}", e));
             }
         }
     }
 
-    let mut cmd = Command::new("yt-dlp");
+    let mut cmd = Command::new(&paths.yt_dlp);
+    // Ensure yt-dlp can find bundled aria2c and ffmpeg
+    binary_manager::augment_path_env(&mut cmd, &paths.dir);
 
     // Basic arguments for better quality and performance
     cmd.arg("--external-downloader")
@@ -421,7 +427,9 @@ async fn perform_download(
         .arg("--newline")
         .arg("--merge-output-format")
         .arg("mp4")
-        .arg("--prefer-free-formats");
+        .arg("--prefer-free-formats")
+        .arg("--ffmpeg-location")
+        .arg(&paths.ffmpeg);
 
     // Format selection based on type and quality
     match download_type {
@@ -468,13 +476,13 @@ async fn perform_download(
         .spawn()
         .map_err(|e| {
             format!(
-                "Failed to start yt-dlp: {}. Make sure yt-dlp and aria2c are installed.",
+                "Failed to start bundled yt-dlp: {}. This is an application error; please reinstall or report a bug.",
                 e
             )
         })?;
 
     // Get video title for notification
-    let video_title = match get_video_metadata(url.to_string()).await {
+    let video_title = match get_video_metadata(app_handle.clone(), url.to_string()).await {
         Ok(metadata) => metadata.title,
         Err(_) => "Unknown Video".to_string(),
     };
@@ -805,7 +813,7 @@ async fn perform_download(
     if output.success() {
         // If trimming is enabled, perform FFmpeg trimming
         if trimming_enabled {
-            perform_trimming(window, progress_state, output_folder, start_time, end_time).await?;
+            perform_trimming(window, progress_state, output_folder, start_time, end_time, paths.ffmpeg.clone()).await?;
         }
         Ok(video_title)
     } else {
@@ -830,6 +838,7 @@ async fn perform_trimming(
     output_folder: &str,
     start_time: Option<f64>,
     end_time: Option<f64>,
+    ffmpeg_path: std::path::PathBuf,
 ) -> Result<(), String> {
     use std::fs;
     use std::path::Path;
@@ -854,7 +863,7 @@ async fn perform_trimming(
     let final_name = file_name_str.replace("_temp", "");
     let final_path = folder_path.join(final_name);
 
-    let mut ffmpeg_cmd = Command::new("ffmpeg");
+    let mut ffmpeg_cmd = Command::new(&ffmpeg_path);
 
     // Add input file
     ffmpeg_cmd.arg("-i").arg(&temp_path);
