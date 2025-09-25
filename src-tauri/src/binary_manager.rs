@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use tauri::{AppHandle, Runtime};
+use tauri::{path::BaseDirectory, AppHandle, Manager, Runtime};
 
 #[derive(Debug, Clone)]
 pub struct BinaryPaths {
@@ -107,15 +107,27 @@ fn candidate_base_dirs() -> Vec<PathBuf> {
     bases
 }
 
-pub fn resolve_paths<R: Runtime>(_app: &AppHandle<R>) -> Result<BinaryPaths, String> {
+pub fn resolve_paths<R: Runtime>(app: &AppHandle<R>) -> Result<BinaryPaths, String> {
     let plat = platform_dir();
     let y_name = exe_name("yt-dlp");
     let a_name = exe_name("aria2c");
     let f_name = exe_name("ffmpeg");
 
-    let y_rel = PathBuf::from("binaries").join(plat).join(y_name);
-    let a_rel = PathBuf::from("binaries").join(plat).join(a_name);
-    let f_rel = PathBuf::from("binaries").join(plat).join(f_name);
+    let base_rel = PathBuf::from("binaries").join(plat);
+    let y_rel = base_rel.join(&y_name);
+    let a_rel = base_rel.join(&a_name);
+    let f_rel = base_rel.join(&f_name);
+
+    // 0) Prefer binaries bundled as Tauri resources (packaged builds)
+    if let Ok(resource_dir) = app.path().resolve(base_rel.clone(), BaseDirectory::Resource) {
+        let yt = resource_dir.join(&y_name);
+        let ar = resource_dir.join(&a_name);
+        let ff = resource_dir.join(&f_name);
+        if yt.exists() && ar.exists() && ff.exists() {
+            let dir = resource_dir.canonicalize().unwrap_or(resource_dir.clone());
+            return Ok(BinaryPaths { dir, yt_dlp: yt, aria2c: ar, ffmpeg: ff });
+        }
+    }
 
     // 1) Look near the executable and in common resource dirs
     for base in candidate_base_dirs() {
