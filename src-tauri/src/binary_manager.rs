@@ -1,5 +1,5 @@
 use std::path::{Path, PathBuf};
-use tauri::AppHandle;
+use tauri::{AppHandle, Runtime};
 
 #[derive(Debug, Clone)]
 pub struct BinaryPaths {
@@ -24,6 +24,32 @@ fn platform_dir() -> &'static str {
 
     #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
     { return "macos-arm64"; }
+
+    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
+    { return "android-arm64"; }
+
+    #[cfg(all(target_os = "android", target_arch = "arm"))]
+    { return "android-arm"; }
+
+    #[cfg(all(target_os = "android", target_arch = "x86"))]
+    { return "android-x86"; }
+
+    #[cfg(all(target_os = "android", target_arch = "x86_64"))]
+    { return "android-x64"; }
+
+    // Fallback to a generic directory name to satisfy compilation on any target.
+    #[cfg(not(any(
+        all(target_os = "windows", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "x86_64"),
+        all(target_os = "linux", target_arch = "aarch64"),
+        all(target_os = "macos", target_arch = "x86_64"),
+        all(target_os = "macos", target_arch = "aarch64"),
+        all(target_os = "android", target_arch = "aarch64"),
+        all(target_os = "android", target_arch = "arm"),
+        all(target_os = "android", target_arch = "x86"),
+        all(target_os = "android", target_arch = "x86_64"),
+    )))]
+    { return "unknown"; }
 }
 
 fn exe_name(base: &str) -> String {
@@ -81,7 +107,7 @@ fn candidate_base_dirs() -> Vec<PathBuf> {
     bases
 }
 
-pub fn resolve_paths(app: &AppHandle) -> Result<BinaryPaths, String> {
+pub fn resolve_paths<R: Runtime>(_app: &AppHandle<R>) -> Result<BinaryPaths, String> {
     let plat = platform_dir();
     let y_name = exe_name("yt-dlp");
     let a_name = exe_name("aria2c");

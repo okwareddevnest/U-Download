@@ -2,11 +2,14 @@ import { useState, useEffect } from "react";
 import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { downloadDir, videoDir, join, dirname } from "@tauri-apps/api/path";
+import { isPermissionGranted as notifGranted, requestPermission as notifRequest, sendNotification } from "@tauri-apps/plugin-notification";
 import VideoPreview from "./VideoPreview";
 import soundNotifications from "./SoundNotifications";
 import "./App.css";
 
 function App() {
+  const isAndroid = typeof navigator !== 'undefined' && /android/i.test(navigator.userAgent);
   const [url, setUrl] = useState("");
   const [downloadType, setDownloadType] = useState("mp4");
   const [quality, setQuality] = useState("best");
@@ -52,6 +55,46 @@ function App() {
     })();
   }, []);
 
+  // Initialize Android defaults: set Videos dir and capture share intents
+  useEffect(() => {
+    (async () => {
+      try {
+        // Default output folder
+        let vdir = null;
+        try { vdir = await videoDir(); } catch (_) {}
+        if (!vdir) {
+          try { vdir = await invoke('get_android_videos_dir'); } catch (_) {}
+        }
+        if (!vdir) {
+          try {
+            const ddir = await downloadDir();
+            const parent = await dirname(ddir);
+            vdir = await join(parent, 'Movies');
+          } catch (_) {}
+        }
+        if (vdir && !outputFolder) {
+          setOutputFolder(vdir);
+          localStorage.setItem("outputFolder", vdir);
+        }
+
+        // Android Share intent via native bridge (file-based)
+        try {
+          const shared = await invoke('get_shared_url');
+          if (shared && isValidYouTubeUrl(shared)) {
+            setUrl(shared);
+          }
+        } catch {}
+
+        // Notification permission
+        try {
+          const granted = await notifGranted();
+          if (!granted) await notifRequest();
+        } catch {}
+      } catch {}
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   useEffect(() => {
     const savedFolder = localStorage.getItem("outputFolder");
     const savedType = localStorage.getItem("downloadType");
@@ -85,6 +128,7 @@ function App() {
         setProgress(0);
         setSpeed("");
         setEta("");
+        try { sendNotification({ title: 'Download Failed', body: String(event.payload) }); } catch {}
       });
 
       const completeUnlisten = await listen("download-complete", (event) => {
@@ -92,6 +136,7 @@ function App() {
         
         // Play completion sound only
         soundNotifications.playDownloadComplete();
+        try { sendNotification({ title: 'Download Complete', body: String(event.payload) }); } catch {}
       });
 
       return () => {
@@ -110,6 +155,10 @@ function App() {
   };
 
   const selectOutputFolder = async () => {
+    if (isAndroid) {
+      alert('On Android, U-Download saves to the Videos folder by default.');
+      return;
+    }
     setIsSelectingFolder(true);
     try {
       const folder = await invoke("select_output_folder");
@@ -164,8 +213,17 @@ function App() {
       return;
     }
     if (!outputFolder) {
-      alert("Please select an output folder");
-      return;
+      if (isAndroid) {
+        try {
+          const vdir = await videoDir();
+          if (vdir) {
+            setOutputFolder(vdir);
+          }
+        } catch {}
+      } else {
+        alert("Please select an output folder");
+        return;
+      }
     }
 
     // Check if FFmpeg is available when trimming is enabled
