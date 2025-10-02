@@ -37,7 +37,6 @@ fn platform_dir() -> &'static str {
     #[cfg(all(target_os = "android", target_arch = "x86_64"))]
     { return "android-x64"; }
 
-    // Fallback to a generic directory name to satisfy compilation on any target.
     #[cfg(not(any(
         all(target_os = "windows", target_arch = "x86_64"),
         all(target_os = "linux", target_arch = "x86_64"),
@@ -59,53 +58,107 @@ fn exe_name(base: &str) -> String {
     { base.to_string() }
 }
 
-fn try_dev_paths(rel: &str) -> Option<PathBuf> {
-    // Probe a few likely dev locations relative to cwd and project structure
-    let mut candidates: Vec<PathBuf> = Vec::new();
-    candidates.push(PathBuf::from(rel));
-    candidates.push(PathBuf::from("src-tauri").join(rel));
-    if let Ok(cwd) = std::env::current_dir() {
-        candidates.push(cwd.join(rel));
-        candidates.push(cwd.join("src-tauri").join(rel));
-    }
-    if let Ok(exe) = std::env::current_exe() {
-        if let Some(dir) = exe.parent() {
-            candidates.push(dir.join(rel));
-            candidates.push(dir.join("..").join(rel));
-            candidates.push(dir.join("..").join("..").join(rel));
-        }
-    }
-    for c in candidates {
-        if c.exists() {
-            return Some(c);
+fn try_resolve_in_resources<R: Runtime>(
+    app: &AppHandle<R>,
+    base_rel: &Path,
+    y_name: &str,
+    a_name: &str,
+    f_name: &str,
+) -> Option<BinaryPaths> {
+    if let Ok(resource_dir) = app.path().resolve(base_rel, BaseDirectory::Resource) {
+        let yt = resource_dir.join(y_name);
+        let ar = resource_dir.join(a_name);
+        let ff = resource_dir.join(f_name);
+        
+        if yt.exists() && ar.exists() && ff.exists() {
+            let dir = resource_dir.canonicalize().unwrap_or(resource_dir);
+            return Some(BinaryPaths { dir, yt_dlp: yt, aria2c: ar, ffmpeg: ff });
         }
     }
     None
 }
 
-fn candidate_base_dirs() -> Vec<PathBuf> {
+fn try_resolve_near_executable(
+    y_rel: &Path,
+    a_rel: &Path,
+    f_rel: &Path,
+) -> Option<BinaryPaths> {
     let mut bases: Vec<PathBuf> = Vec::new();
+    
     if let Ok(exe) = std::env::current_exe() {
         if let Some(dir) = exe.parent() {
-            // Executable directory
             bases.push(dir.to_path_buf());
-            // One level up
             bases.push(dir.join(".."));
-            // Common resources folder patterns
             bases.push(dir.join("resources"));
             bases.push(dir.join("..").join("resources"));
-            // macOS .app bundle Resources
             bases.push(dir.join("..").join("Resources"));
             bases.push(dir.join("..").join("..").join("Resources"));
         }
     }
-    // Also try current working directory and src-tauri
+    
     if let Ok(cwd) = std::env::current_dir() {
         bases.push(cwd);
-        bases.push(PathBuf::from("src-tauri"));
     }
-    bases
+    
+    for base in bases {
+        let yt = base.join(y_rel);
+        let ar = base.join(a_rel);
+        let ff = base.join(f_rel);
+        
+        if yt.exists() && ar.exists() && ff.exists() {
+            let dir = yt.parent().unwrap_or(Path::new(".")).to_path_buf();
+            return Some(BinaryPaths { dir, yt_dlp: yt, aria2c: ar, ffmpeg: ff });
+        }
+    }
+    None
 }
+
+fn try_resolve_dev_paths(
+    y_rel: &Path,
+    a_rel: &Path,
+    f_rel: &Path,
+) -> Option<BinaryPaths> {
+    let mut candidates: Vec<PathBuf> = Vec::new();
+    
+    let y_src_tauri = PathBuf::from("src-tauri").join(y_rel);
+    
+    candidates.push(y_rel.to_path_buf());
+    candidates.push(y_src_tauri.clone());
+    
+    if let Ok(cwd) = std::env::current_dir() {
+        candidates.push(cwd.join(y_rel));
+        candidates.push(cwd.join(&y_src_tauri));
+    }
+    
+    if let Ok(exe) = std::env::current_exe() {
+        if let Some(dir) = exe.parent() {
+            candidates.push(dir.join(y_rel));
+            candidates.push(dir.join(&y_src_tauri));
+            candidates.push(dir.join("..").join(y_rel));
+            candidates.push(dir.join("..").join("..").join(y_rel));
+        }
+    }
+    
+    for y_candidate in &candidates {
+        if y_candidate.exists() {
+            if let Some(y_parent) = y_candidate.parent() {
+                let ar = y_parent.join(a_rel.file_name()?);
+                let ff = y_parent.join(f_rel.file_name()?);
+                
+                if ar.exists() && ff.exists() {
+                    return Some(BinaryPaths {
+                        dir: y_parent.to_path_buf(),
+                        yt_dlp: y_candidate.clone(),
+                        aria2c: ar,
+                        ffmpeg: ff,
+                    });
+                }
+            }
+        }
+    }
+    None
+}
+
 
 pub fn resolve_paths<R: Runtime>(app: &AppHandle<R>) -> Result<BinaryPaths, String> {
     let plat = platform_dir();
@@ -118,40 +171,22 @@ pub fn resolve_paths<R: Runtime>(app: &AppHandle<R>) -> Result<BinaryPaths, Stri
     let a_rel = base_rel.join(&a_name);
     let f_rel = base_rel.join(&f_name);
 
-    // 0) Prefer binaries bundled as Tauri resources (packaged builds)
-    if let Ok(resource_dir) = app.path().resolve(base_rel.clone(), BaseDirectory::Resource) {
-        let yt = resource_dir.join(&y_name);
-        let ar = resource_dir.join(&a_name);
-        let ff = resource_dir.join(&f_name);
-        if yt.exists() && ar.exists() && ff.exists() {
-            let dir = resource_dir.canonicalize().unwrap_or(resource_dir.clone());
-            return Ok(BinaryPaths { dir, yt_dlp: yt, aria2c: ar, ffmpeg: ff });
-        }
+    if let Some(paths) = try_resolve_in_resources(app, &base_rel, &y_name, &a_name, &f_name) {
+        return Ok(paths);
     }
 
-    // 1) Look near the executable and in common resource dirs
-    for base in candidate_base_dirs() {
-        let yt = base.join(&y_rel);
-        let ar = base.join(&a_rel);
-        let ff = base.join(&f_rel);
-        if yt.exists() && ar.exists() && ff.exists() {
-            let dir = yt.parent().unwrap_or(Path::new(".")).to_path_buf();
-            return Ok(BinaryPaths { dir, yt_dlp: yt, aria2c: ar, ffmpeg: ff });
-        }
+    if let Some(paths) = try_resolve_near_executable(&y_rel, &a_rel, &f_rel) {
+        return Ok(paths);
     }
 
-    // 2) Try dev paths (repo layout)
-    let y = try_dev_paths(&format!("src-tauri/{}", y_rel.display()))
-        .or_else(|| try_dev_paths(&y_rel.display().to_string()))
-        .ok_or_else(|| format!("Bundled yt-dlp not found: {}", y_rel.display()))?;
-    let a = try_dev_paths(&format!("src-tauri/{}", a_rel.display()))
-        .or_else(|| try_dev_paths(&a_rel.display().to_string()))
-        .ok_or_else(|| format!("Bundled aria2c not found: {}", a_rel.display()))?;
-    let f = try_dev_paths(&format!("src-tauri/{}", f_rel.display()))
-        .or_else(|| try_dev_paths(&f_rel.display().to_string()))
-        .ok_or_else(|| format!("Bundled ffmpeg not found: {}", f_rel.display()))?;
-    let dir = y.parent().unwrap_or(Path::new(".")).to_path_buf();
-    Ok(BinaryPaths { dir, yt_dlp: y, aria2c: a, ffmpeg: f })
+    if let Some(paths) = try_resolve_dev_paths(&y_rel, &a_rel, &f_rel) {
+        return Ok(paths);
+    }
+
+    Err(format!(
+        "Failed to locate required binaries for platform '{}'. Expected: {} (yt-dlp), {} (aria2c), {} (ffmpeg) in directory: {}",
+        plat, y_name, a_name, f_name, base_rel.display()
+    ))
 }
 
 pub fn ensure_executable(paths: &BinaryPaths) -> Result<(), String> {
@@ -162,8 +197,7 @@ pub fn ensure_executable(paths: &BinaryPaths) -> Result<(), String> {
             if let Ok(meta) = std::fs::metadata(p) {
                 let mut perms = meta.permissions();
                 let mode = perms.mode();
-                // ensure 0o755
-                if mode & 0o111 == 0 { // no exec bits
+                if mode & 0o111 == 0 {
                     let new_mode = (mode | 0o755) & 0o7777;
                     perms.set_mode(new_mode);
                     std::fs::set_permissions(p, perms)
