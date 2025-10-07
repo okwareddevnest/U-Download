@@ -63,3 +63,7 @@ ehthumbs.db
 *.sh
 scripts/*
 *.ps1
+
+
+udownload.keystore
+u-download.desktop

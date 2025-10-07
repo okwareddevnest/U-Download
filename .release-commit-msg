@@ -1,0 +1,27 @@
+fix: complete binary resolution overhaul and yt-dlp update
+
+CRITICAL FIXES:
+- Enhanced build.rs with automatic binary copying during compilation
+- Rewrote binary_manager.rs with 4-tier resolution system
+- Updated yt-dlp to 2025.09.26 for all platforms (Linux, macOS, Windows)
+- Fixed YouTube download errors (nsig extraction failures)
+
+BINARY RESOLUTION:
+- Added try_resolve_target_dir() for development builds
+- Enhanced platform-specific path resolution (AppImage, deb, rpm, dmg, exe)
+- Automatic permission setting (755) for Unix binaries
+- Comprehensive fallback mechanisms for all deployment scenarios
+
+YT-DLP UPDATE:
+- Linux x64/ARM64: 2025.09.26 (3.0MB)
+- macOS x64/ARM64: 2025.09.26 (35MB) 
+- Windows x64: 2025.09.26 (18MB)
+
+TESTING:
+✓ Development mode binary resolution
+✓ Release build binary resolution  
+✓ All binaries executable with correct permissions
+✓ YouTube downloads working (all formats available)
+✓ .deb package verified (318MB with all binaries)
+
+Closes issues with binary location errors and YouTube download failures.
