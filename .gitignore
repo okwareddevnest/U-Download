@@ -27,6 +27,10 @@ dist-ssr
 src-tauri/target
 src-tauri/gen
 
+# Bundled tool binaries (yt-dlp, ffmpeg, aria2c) are fetched at build time
+# by scripts/fetch-binaries.sh rather than stored in Git/Git LFS.
+src-tauri/binaries/
+
 # Build artifacts
 *.deb
 *.msi
@@ -64,6 +68,8 @@ ehthumbs.db
 # Scripts
 *.sh
 scripts/*
+# ...but the build-time binary fetcher must be tracked
+!scripts/fetch-binaries.sh
 *.ps1
 
 

@@ -54,13 +54,24 @@ pub async fn resolve_preview<R: Runtime>(
 
     // --dump-single-json emits exactly one object even for playlists, unlike
     // --dump-json which emits one per entry and breaks JSON parsing.
-    let output = Command::new(&paths.yt_dlp)
-        .arg("--dump-single-json")
-        .arg("--no-playlist")
-        .arg("--no-download")
-        .arg(&url)
-        .output()
-        .map_err(|e| format!("Failed to probe video: {e}"))?;
+    //
+    // Run on a blocking thread: yt-dlp's network fetch + extraction can take
+    // several seconds, and this is an async fn — calling Command::output()
+    // inline would block whichever runtime thread services this future,
+    // stalling other concurrent Tauri commands (the job queue now runs
+    // downloads concurrently on that same runtime).
+    let yt_dlp = paths.yt_dlp;
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(&yt_dlp)
+            .arg("--dump-single-json")
+            .arg("--no-playlist")
+            .arg("--no-download")
+            .arg(&url)
+            .output()
+    })
+    .await
+    .map_err(|e| format!("Probe task failed: {e}"))?
+    .map_err(|e| format!("Failed to probe video: {e}"))?;
 
     if !output.status.success() {
         return Err(format!(
@@ -94,6 +105,92 @@ pub async fn resolve_preview<R: Runtime>(
             thumbnail,
         }),
     }
+}
+
+/// Downloads a small copy of the video for local scrubbing, for sources with no
+/// directly playable stream. Cached by URL hash under the app cache directory.
+///
+/// The proxy path is the common one, not a rare edge case: current yt-dlp
+/// extraction against YouTube frequently drops muxed formats entirely (see the
+/// module-level notes on `pick_muxed_format`), so most previews land here.
+#[tauri::command]
+pub async fn fetch_preview_proxy<R: Runtime>(
+    app_handle: AppHandle<R>,
+    url: String,
+) -> Result<String, String> {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+    use tauri::Manager;
+
+    let paths = crate::binary_manager::resolve_paths(&app_handle)?;
+    crate::binary_manager::ensure_executable(&paths)?;
+
+    let cache_dir = app_handle
+        .path()
+        .app_cache_dir()
+        .map_err(|e| format!("No cache directory: {e}"))?
+        .join("preview");
+    std::fs::create_dir_all(&cache_dir).map_err(|e| format!("Cannot create cache dir: {e}"))?;
+
+    let mut hasher = DefaultHasher::new();
+    url.hash(&mut hasher);
+    let hash = hasher.finish();
+    let target = cache_dir.join(format!("{:x}.mp4", hash));
+    let tmp = cache_dir.join(format!("{:x}.partial.mp4", hash));
+
+    if target.exists() {
+        return Ok(target.to_string_lossy().to_string());
+    }
+
+    // A previous run may have been killed mid-download, leaving a partial
+    // file at `tmp`. yt-dlp would otherwise resume/append to it; remove it
+    // so every attempt starts clean.
+    let _ = std::fs::remove_file(&tmp);
+
+    // Run on a blocking thread: this shells out to yt-dlp/ffmpeg to actually
+    // download a short clip, which can take several seconds. Calling
+    // Command::output() inline on this async fn would stall the runtime
+    // thread and, with it, other concurrent Tauri commands (the job queue
+    // runs downloads concurrently on the same runtime).
+    let yt_dlp = paths.yt_dlp;
+    let ffmpeg = paths.ffmpeg;
+    let tmp_for_task = tmp.clone();
+    let url_for_task = url.clone();
+    let output = tokio::task::spawn_blocking(move || {
+        Command::new(&yt_dlp)
+            .arg("--no-playlist")
+            .arg("-f")
+            .arg("best[height<=360]/worst")
+            .arg("--merge-output-format")
+            .arg("mp4")
+            .arg("--ffmpeg-location")
+            .arg(&ffmpeg)
+            .arg("-o")
+            .arg(&tmp_for_task)
+            .arg(&url_for_task)
+            .output()
+    })
+    .await
+    .map_err(|e| format!("Preview download task failed: {e}"))?
+    .map_err(|e| format!("Failed to fetch preview: {e}"))?;
+
+    if !output.status.success() {
+        // Never leave a partial file behind for a later call to mistake for
+        // a complete proxy — that is what turned a transient failure into a
+        // permanently poisoned cache entry.
+        let _ = std::fs::remove_file(&tmp);
+        return Err(format!(
+            "Preview download failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        ));
+    }
+
+    // Atomic within one directory on every platform this app targets: after
+    // this, `target` either does not exist or is a complete file — never a
+    // half-written one.
+    std::fs::rename(&tmp, &target).map_err(|e| format!("Could not finalise preview: {e}"))?;
+
+    Ok(target.to_string_lossy().to_string())
 }
 
 #[cfg(test)]

@@ -149,6 +149,16 @@ cd ~/Downloads/
 - **Installation Guide**: See `INSTALLATION.md` for platform-specific notes
 - **Developer Guide**: See `DEVELOPER.md` for building from source
 
+## 🛠️ Building from Source
+
+The `yt-dlp`, `ffmpeg`, and `aria2c` binaries bundled into releases are **not** stored in this Git repository — they're fetched from upstream releases at build time to keep the repo lightweight. Before running a dev build or packaging the app yourself, fetch them once:
+
+```bash
+scripts/fetch-binaries.sh
+```
+
+This detects your platform automatically and downloads the three binaries into `src-tauri/binaries/<platform>/`. Pass a platform name (e.g. `linux-arm64`) to cross-fetch for another target, or `--force` to re-download. See `scripts/fetch-binaries.sh --help` for details. Once fetched, `npm run tauri dev` / `npm run tauri build` will find and bundle them exactly as before — end users of a built release still get everything bundled with zero extra setup.
+
 ## 🔒 Privacy & Security
 
 - **No Telemetry**: We don't track or collect any data

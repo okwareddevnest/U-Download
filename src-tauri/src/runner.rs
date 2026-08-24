@@ -14,7 +14,7 @@ use crate::binary_manager;
 use crate::jobs::{JobId, JobProgress, JobStatus, SharedJobs};
 use crate::queue;
 use crate::ytdlp::{build_download_args, parse_progress_line, DownloadSpec};
-use std::io::{BufRead, BufReader, Read};
+use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use tauri::{Emitter, Runtime, Window};
@@ -81,6 +81,102 @@ fn destination_from_line(line: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Splits a byte stream into records on either `\n` or `\r`.
+///
+/// yt-dlp's own progress lines are newline-terminated — we pass `--newline` —
+/// but they are not what an untrimmed job produces. yt-dlp hands those to
+/// aria2c, and although it disables aria2c's periodic summary
+/// (`--summary-interval=0`, `--download-result=hide`) it keeps the live
+/// single-line readout (`--show-console-readout=true`). aria2c redraws that
+/// readout with a carriage return and never terminates it with a newline, so a
+/// line-oriented reader sees one enormous record at end of stream and the user
+/// watches 0% until the download finishes.
+///
+/// Empty records are dropped. That is also what stops a `\r\n` pair from
+/// producing a spurious blank record between its two bytes — and a blank
+/// record is not something either parser could use anyway.
+#[derive(Default)]
+struct RecordSplitter {
+    pending: Vec<u8>,
+}
+
+impl RecordSplitter {
+    /// Feeds one chunk of bytes and returns every record it completed.
+    ///
+    /// A record straddling two chunks stays in `pending` until the delimiter
+    /// arrives, so chunk boundaries are invisible to the caller.
+    fn push(&mut self, chunk: &[u8]) -> Vec<String> {
+        let mut records = Vec::new();
+        for &byte in chunk {
+            if byte == b'\n' || byte == b'\r' {
+                if let Some(record) = self.take_pending() {
+                    records.push(record);
+                }
+            } else {
+                self.pending.push(byte);
+            }
+        }
+        records
+    }
+
+    /// Takes whatever is buffered but not yet terminated.
+    ///
+    /// Called once at end of stream, where it is not an edge case: aria2c's
+    /// last readout never gets a terminator, so this is how the final progress
+    /// update arrives.
+    fn take_pending(&mut self) -> Option<String> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        let record = String::from_utf8_lossy(&self.pending).into_owned();
+        self.pending.clear();
+        Some(record)
+    }
+}
+
+/// Applies one record of downloader output to the job.
+///
+/// Split out so the reader loop and the end-of-stream fragment go through
+/// exactly the same path.
+fn consume_record<R: Runtime>(
+    window: &Window<R>,
+    jobs: &SharedJobs,
+    id: &JobId,
+    record: &str,
+    output_path: &mut Option<String>,
+    last_emit: &mut std::time::Instant,
+) {
+    if let Some(path) = destination_from_line(record) {
+        *output_path = Some(path);
+        return;
+    }
+
+    let Some(p) = parse_progress_line(record) else {
+        return;
+    };
+
+    let total_bytes = p.total_bytes.unwrap_or(0);
+    {
+        // Lock scope: one map write, once per progress record.
+        jobs.lock().unwrap().update_progress(
+            id,
+            JobProgress {
+                percentage: p.percentage,
+                speed_bytes_per_sec: p.speed_bytes_per_sec.unwrap_or(0),
+                eta_seconds: p.eta_seconds,
+                bytes_downloaded: (total_bytes as f64 * p.percentage / 100.0) as u64,
+                total_bytes,
+            },
+        );
+    }
+
+    let due = last_emit.elapsed().as_millis() >= PROGRESS_EMIT_INTERVAL_MS;
+    if due || p.percentage >= 100.0 {
+        emit_job(window, jobs, id);
+        *last_emit = std::time::Instant::now();
+    }
 }
 
 /// Runs one job to completion on a blocking thread.
@@ -170,48 +266,38 @@ pub fn run_job<R: Runtime>(window: Window<R>, jobs: SharedJobs, id: JobId, ctx: 
 
     let mut output_path: Option<String> = None;
 
-    if let Some(stdout) = stdout {
-        let reader = BufReader::new(stdout);
+    if let Some(mut stdout) = stdout {
+        // Read raw bytes rather than `BufReader::lines()`. aria2c's live
+        // readout is the only progress an untrimmed job produces, and aria2c
+        // redraws it with a carriage return and never terminates it with a
+        // newline — `lines()` would yield nothing at all until the pipe closed
+        // and then replay every update at once, leaving the bar at 0% for the
+        // whole download.
+        let mut splitter = RecordSplitter::default();
+        let mut chunk = [0u8; 4096];
         let mut last_emit = std::time::Instant::now();
 
-        // aria2c redraws its readout with carriage returns rather than
-        // newlines, so a single `\n`-delimited line can carry several updates.
-        // Flattening them here keeps the body below one loop over readouts.
-        let readouts = reader
-            .lines()
-            .map_while(Result::ok)
-            .flat_map(|line| line.split('\r').map(str::to_owned).collect::<Vec<_>>());
-
-        for line in readouts {
-            if let Some(path) = destination_from_line(&line) {
-                output_path = Some(path);
-                continue;
-            }
-
-            let Some(p) = parse_progress_line(&line) else {
-                continue;
+        loop {
+            let read = match stdout.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(read) => read,
             };
-
-            let total_bytes = p.total_bytes.unwrap_or(0);
-            {
-                // Lock scope: one map write, once per progress line.
-                jobs.lock().unwrap().update_progress(
+            for record in splitter.push(&chunk[..read]) {
+                consume_record(
+                    &window,
+                    &jobs,
                     &id,
-                    JobProgress {
-                        percentage: p.percentage,
-                        speed_bytes_per_sec: p.speed_bytes_per_sec.unwrap_or(0),
-                        eta_seconds: p.eta_seconds,
-                        bytes_downloaded: (total_bytes as f64 * p.percentage / 100.0) as u64,
-                        total_bytes,
-                    },
+                    &record,
+                    &mut output_path,
+                    &mut last_emit,
                 );
             }
+        }
 
-            let due = last_emit.elapsed().as_millis() >= PROGRESS_EMIT_INTERVAL_MS;
-            if due || p.percentage >= 100.0 {
-                emit_job(&window, &jobs, &id);
-                last_emit = std::time::Instant::now();
-            }
+        // aria2c's final readout has no terminator at all, so the last
+        // progress update only exists as this fragment.
+        if let Some(record) = splitter.take_pending() {
+            consume_record(&window, &jobs, &id, &record, &mut output_path, &mut last_emit);
         }
     }
 
@@ -313,7 +399,91 @@ pub fn pump<R: Runtime>(window: Window<R>, jobs: SharedJobs, ctx: RunnerContext)
 
 #[cfg(test)]
 mod tests {
-    use super::destination_from_line;
+    use super::{destination_from_line, RecordSplitter};
+    use crate::ytdlp::parse_progress_line;
+
+    /// Feeds the whole stream as one chunk and closes it.
+    fn split_all(stream: &[u8]) -> Vec<String> {
+        let mut splitter = RecordSplitter::default();
+        let mut records = splitter.push(stream);
+        records.extend(splitter.take_pending());
+        records
+    }
+
+    /// Feeds the stream in the given pieces, so chunk boundaries fall wherever
+    /// the test wants them.
+    fn split_chunks(chunks: &[&[u8]]) -> Vec<String> {
+        let mut splitter = RecordSplitter::default();
+        let mut records = Vec::new();
+        for chunk in chunks {
+            records.extend(splitter.push(chunk));
+        }
+        records.extend(splitter.take_pending());
+        records
+    }
+
+    // aria2c's readout is redrawn with `\r` and never gets a `\n`.
+    #[test]
+    fn splits_records_on_carriage_returns_alone() {
+        assert_eq!(split_all(b"one\rtwo\rthree\r"), vec!["one", "two", "three"]);
+    }
+
+    #[test]
+    fn splits_records_on_newlines_alone() {
+        assert_eq!(split_all(b"one\ntwo\nthree\n"), vec!["one", "two", "three"]);
+    }
+
+    #[test]
+    fn treats_crlf_as_one_separator() {
+        assert_eq!(split_all(b"one\r\ntwo\r\n"), vec!["one", "two"]);
+    }
+
+    #[test]
+    fn joins_a_record_split_across_chunk_boundaries() {
+        assert_eq!(
+            split_chunks(&[b"one\rtw", b"o\rthr", b"ee\r"]),
+            vec!["one", "two", "three"]
+        );
+    }
+
+    // A `\r` ending one chunk and the matching `\n` opening the next must not
+    // manufacture a blank record between them.
+    #[test]
+    fn a_crlf_straddling_a_chunk_boundary_is_still_one_separator() {
+        assert_eq!(split_chunks(&[b"one\r", b"\ntwo\r\n"]), vec!["one", "two"]);
+    }
+
+    // This is how the final progress update arrives — aria2c never terminates
+    // its last readout.
+    #[test]
+    fn returns_the_unterminated_trailing_fragment_at_eof() {
+        assert_eq!(split_all(b"one\rtwo\rlast"), vec!["one", "two", "last"]);
+    }
+
+    #[test]
+    fn produces_nothing_from_an_empty_or_blank_stream() {
+        assert!(split_all(b"").is_empty());
+        assert!(split_all(b"\r\n\r\n\n\r").is_empty());
+    }
+
+    // End to end over the splitter: a realistic aria2c readout stream, redrawn
+    // with carriage returns and cut off mid-record at EOF, must yield every
+    // percentage the user should have seen.
+    #[test]
+    fn an_aria2c_readout_stream_yields_every_update() {
+        let stream: &[&[u8]] = &[
+            b"[#f1a2b3 1.0MiB/10MiB(10%) CN:16 DL:1.0MiB ETA:9s]\r[#f1a2b3 5.0MiB/10M",
+            b"iB(50%) CN:16 DL:1.0MiB ETA:5s]\r[#f1a2b3 10MiB/10MiB(100%) CN:16 DL:1.0MiB]",
+        ];
+
+        let percentages: Vec<f64> = split_chunks(stream)
+            .iter()
+            .filter_map(|record| parse_progress_line(record))
+            .map(|p| p.percentage)
+            .collect();
+
+        assert_eq!(percentages, vec![10.0, 50.0, 100.0]);
+    }
 
     #[test]
     fn reads_the_plain_download_destination() {
