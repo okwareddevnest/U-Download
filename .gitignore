@@ -42,6 +42,8 @@ debug*
 *.md
 # !AGENTS.md
 !README.md
+# Design specs and docs are tracked
+!docs/**/*.md
 install.sh
 
 # OS generated files
