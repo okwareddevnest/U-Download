@@ -1,3 +1,4 @@
+#[cfg(target_os = "android")]
 use serde::{Deserialize, Serialize};
 use std::process::Command;
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -31,16 +32,6 @@ struct DownloadProgress {
     bytes_downloaded: u64,
     total_bytes: u64,
     download_start_time: std::time::SystemTime,
-}
-
-#[derive(Debug, Serialize, Deserialize, Clone)]
-struct VideoMetadata {
-    title: String,
-    duration: f64, // Duration in seconds
-    thumbnail_url: String,
-    uploader: String,
-    view_count: Option<u64>,
-    upload_date: Option<String>,
 }
 
 #[cfg(target_os = "android")]
@@ -89,56 +80,6 @@ async fn get_android_videos_dir() -> Result<String, String> {
     }
     #[cfg(not(target_os = "android"))]
     { Err("unsupported".into()) }
-}
-
-#[tauri::command]
-async fn get_video_metadata<R: Runtime>(app_handle: AppHandle<R>, url: String) -> Result<VideoMetadata, String> {
-    let paths = binary_manager::resolve_paths(&app_handle)?;
-    binary_manager::ensure_executable(&paths)?;
-
-    // Get video information using bundled yt-dlp --dump-json
-    let output = Command::new(&paths.yt_dlp)
-        .arg("--dump-json")
-        .arg("--no-download")
-        .arg(&url)
-        .output()
-        .map_err(|e| format!("Failed to get video info: {}", e))?;
-
-    if !output.status.success() {
-        let stderr = String::from_utf8_lossy(&output.stderr);
-        return Err(format!("Failed to get video metadata: {}", stderr));
-    }
-
-    let json_output = String::from_utf8_lossy(&output.stdout);
-    let metadata: serde_json::Value = serde_json::from_str(&json_output)
-        .map_err(|e| format!("Failed to parse video metadata: {}", e))?;
-
-    let title = metadata["title"]
-        .as_str()
-        .unwrap_or("Unknown Title")
-        .to_string();
-
-    let duration = metadata["duration"].as_f64().unwrap_or(0.0);
-
-    let thumbnail_url = metadata["thumbnail"].as_str().unwrap_or("").to_string();
-
-    let uploader = metadata["uploader"]
-        .as_str()
-        .unwrap_or("Unknown Uploader")
-        .to_string();
-
-    let view_count = metadata["view_count"].as_u64();
-
-    let upload_date = metadata["upload_date"].as_str().map(|s| s.to_string());
-
-    Ok(VideoMetadata {
-        title,
-        duration,
-        thumbnail_url,
-        uploader,
-        view_count,
-        upload_date,
-    })
 }
 
 // Android-specific HTTP downloader removed; use unified yt-dlp/ffmpeg flow on all platforms.
@@ -458,7 +399,6 @@ pub fn run() {
             .invoke_handler(tauri::generate_handler![
                 select_output_folder,
                 test_dependencies,
-                get_video_metadata,
                 check_ffmpeg,
                 get_shared_url,
                 get_android_videos_dir,
@@ -468,7 +408,8 @@ pub fn run() {
                 pause_job,
                 resume_job,
                 start_download,
-                probe::resolve_preview
+                probe::resolve_preview,
+                probe::fetch_preview_proxy
             ])
     };
 
@@ -476,7 +417,6 @@ pub fn run() {
     let builder = builder.invoke_handler(tauri::generate_handler![
         select_output_folder,
         test_dependencies,
-        get_video_metadata,
         check_ffmpeg,
         get_shared_url,
         get_android_videos_dir,
@@ -485,7 +425,8 @@ pub fn run() {
         cancel_job,
         pause_job,
         resume_job,
-        probe::resolve_preview
+        probe::resolve_preview,
+        probe::fetch_preview_proxy
     ]);
 
     builder

@@ -1,0 +1,26 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "src/components/TrimWorkbench.jsx"
+        ],
+        "createdAt": "2026-08-24T21:42:52.919Z",
+        "reason": "Claude: L170 is a loading spinner (animate-spin + rounded-full + border-b-2), not a bordered card. The rounded-full plus single-side border IS the spinner mechanism; removing either breaks it. Established idiom in this codebase - identical pattern at App.jsx:555 and App.jsx:714."
+      },
+      {
+        "rule": "border-accent-on-rounded",
+        "value": "*",
+        "files": [
+          "src/App.jsx"
+        ],
+        "createdAt": "2026-08-24T21:46:08.582Z",
+        "reason": "Claude: flagged line is a loading spinner (animate-spin + rounded-full + border-b-2 border-current), not a bordered card. The rounded-full plus single-side border IS the spinner mechanism. Pre-existing pattern, present at HEAD, also at App.jsx:555/714 and TrimWorkbench.jsx:170."
+      }
+    ]
+  }
+}
