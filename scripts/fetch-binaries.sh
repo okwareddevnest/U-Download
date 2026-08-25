@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 #
-# fetch-binaries.sh — download yt-dlp, ffmpeg and aria2c into
+# fetch-binaries.sh — download yt-dlp, ffmpeg, aria2c, a CA certificate
+# bundle (cacert.pem) and (optionally) deno into
 # src-tauri/binaries/<platform>/ so the Tauri build can bundle them.
 #
 # Binaries are no longer stored in Git (the LFS budget for this repo is
@@ -26,6 +27,17 @@
 # extraction — verified to have the executable magic bytes appropriate
 # for the target platform before being installed. A build must never
 # silently ship a 404 page named "yt-dlp".
+#
+# deno is the odd one out: it is a JavaScript runtime that recent yt-dlp
+# versions need for YouTube extraction (without one, yt-dlp warns "No
+# supported JavaScript runtime could be found" and silently returns zero
+# muxed audio+video formats, breaking preview and plain downloads alike).
+# It is fetched with the same rigor as the other three tools (same
+# download/checksum/extract/verify pipeline), but it is treated as
+# optional at the consumer end: its fetch runs in a subshell so that a
+# failure there — logged just as loudly (an ERROR line, same as any other
+# fetch failure) — only exits that subshell, not this whole script.
+# yt-dlp/ffmpeg/aria2c remain required and fatal on failure; deno is not.
 
 set -euo pipefail
 
@@ -63,7 +75,7 @@ for arg in "$@"; do
       FORCE=1
       ;;
     -h|--help)
-      sed -n '2,29p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+      sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
       exit 0
       ;;
     linux-x64|linux-arm64|macos-x64|macos-arm64|windows-x64)
@@ -319,6 +331,24 @@ checksum_source() {
       # release asset lists — no .sha256/.md5/checksums file present.
       echo ""
       ;;
+    cacert.pem)
+      # curl.se publishes a sha256 for the CA bundle right beside it, in
+      # sha256sum's own "<hash>  <filename>" format — same shape as yt-dlp's
+      # SHA2-256SUMS, so verify_checksum_for() handles it unchanged. Confirmed
+      # live (HTTP 200) at the time this was written; if it ever disappears,
+      # download() below fails loudly rather than installing an unverified
+      # trust store, which is the last file that should be taken on faith.
+      echo "sha256:https://curl.se/ca/cacert.pem.sha256"
+      ;;
+    deno)
+      # deno publishes a per-asset "<asset-name>.sha256sum" file alongside
+      # every release zip, in the same "<hash>  <filename>" format as
+      # sha256sum's own output — confirmed live via the GitHub releases
+      # API and by fetching the file for every platform this script
+      # targets. Reuse the exact same asset URL, just with an extra
+      # ".sha256sum" suffix.
+      echo "sha256:$(deno_url).sha256sum"
+      ;;
     *)
       echo ""
       ;;
@@ -418,10 +448,27 @@ aria2c_url() {
   esac
 }
 
+deno_url() {
+  case "$PLATFORM" in
+    linux-x64)   echo "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-unknown-linux-gnu.zip" ;;
+    linux-arm64) echo "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-unknown-linux-gnu.zip" ;;
+    macos-x64)   echo "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-apple-darwin.zip" ;;
+    macos-arm64) echo "https://github.com/denoland/deno/releases/latest/download/deno-aarch64-apple-darwin.zip" ;;
+    windows-x64) echo "https://github.com/denoland/deno/releases/latest/download/deno-x86_64-pc-windows-msvc.zip" ;;
+  esac
+}
+
+cacert_url() {
+  # Platform-independent: the same PEM text file is correct everywhere. It is
+  # copied per-platform so each bundle is self-contained, exactly like the
+  # binaries beside it.
+  echo "https://curl.se/ca/cacert.pem"
+}
+
 # ---------------------------------------------------------------------------
 # Fetch one tool
 #
-# $1 = tool name (yt-dlp | ffmpeg | aria2c)
+# $1 = tool name (yt-dlp | ffmpeg | aria2c | deno)
 # $2 = source URL
 # $3 = "raw" if the URL is the binary itself, "archive" if it needs extracting
 # $4 = inner filename to locate inside the archive (only used when $3=archive)
@@ -481,12 +528,148 @@ fetch_tool() {
 }
 
 # ---------------------------------------------------------------------------
+# Fetch the CA certificate bundle
+#
+# The ffmpeg builds this script installs are compiled --enable-openssl but
+# ship no trust store of their own, so every HTTPS input ffmpeg opens dies
+# with "error:0A000086:SSL routines::certificate verify failed". That breaks
+# the trim path outright: yt-dlp routes --download-sections fetches through
+# ffmpeg. Shipping curl.se's cacert.pem beside the binaries — and pointing
+# SSL_CERT_FILE at it, see binary_manager.rs::augment_path_env — is the only
+# fix that behaves the same on every machine: host trust stores sit in
+# different places per distribution (Debian vs RHEL), may be absent on
+# minimal images, and do not exist at all on Windows.
+#
+# cacert.pem is PEM *text*, so verify_binary()'s magic-byte/minimum-size
+# checks and install_binary()'s chmod +x are both wrong for it. It gets its
+# own validity check and its own install step instead of being forced through
+# the binary-shaped path.
+# ---------------------------------------------------------------------------
+
+CACERT_NAME="cacert.pem"
+
+# Soft check: is $1 a non-empty file that actually contains PEM certificates?
+# Returns 0/1 and never exits — safe to call from the idempotency conditional,
+# exactly like binary_looks_valid(). Logs the specific reason on failure.
+cacert_looks_valid() {
+  local f="$1"
+  if [ ! -f "$f" ]; then
+    log "    check failed: $f does not exist"
+    return 1
+  fi
+  if [ ! -s "$f" ]; then
+    log "    check failed: $f is empty"
+    return 1
+  fi
+  if ! grep -q -- "-----BEGIN CERTIFICATE-----" "$f"; then
+    log "    check failed: $f contains no '-----BEGIN CERTIFICATE-----' header — not a PEM bundle."
+    return 1
+  fi
+  return 0
+}
+
+fetch_cacert() {
+  local url dest
+  url="$(cacert_url)"
+  dest="$BIN_DIR/$CACERT_NAME"
+
+  if [ "$FORCE" -ne 1 ] && [ -f "$dest" ]; then
+    if cacert_looks_valid "$dest"; then
+      local existing_size
+      existing_size="$(wc -c < "$dest" | tr -d ' ')"
+      log "==> $CACERT_NAME: already present and verified valid ($existing_size bytes), skipping (use --force to re-fetch)"
+      SKIPPED+=("$CACERT_NAME|$dest|$existing_size bytes")
+      return
+    else
+      log "==> $CACERT_NAME: existing file at $dest failed validity checks (see above) — refetching"
+    fi
+  fi
+
+  log "==> $CACERT_NAME: fetching for $PLATFORM"
+
+  local work_dir="$TMP_ROOT/cacert"
+  mkdir -p "$work_dir"
+  local staged="$work_dir/$CACERT_NAME"
+
+  download "$url" "$staged"
+  verify_checksum_for "$CACERT_NAME" "$url" "$staged"
+
+  if ! cacert_looks_valid "$staged"; then
+    fail "Downloaded content from $url is not a PEM certificate bundle. Refusing to install it."
+  fi
+
+  mkdir -p "$(dirname "$dest")"
+  cp "$staged" "$dest"
+  # Data, not a program: 0644, and deliberately no chmod +x.
+  chmod 0644 "$dest" 2>/dev/null || true
+
+  if ! cacert_looks_valid "$dest"; then
+    fail "Installed $dest failed its post-install PEM check."
+  fi
+
+  local final_size
+  final_size="$(wc -c < "$dest" | tr -d ' ')"
+  log "==> $CACERT_NAME: installed at $dest ($final_size bytes)"
+  FETCHED+=("$CACERT_NAME|$dest|$final_size bytes")
+}
+
+# ---------------------------------------------------------------------------
 # Run
 # ---------------------------------------------------------------------------
 
 fetch_tool "yt-dlp" "$(yt_dlp_url)" "raw"
 fetch_tool "ffmpeg" "$(ffmpeg_url)" "archive" "ffmpeg${EXE_SUFFIX}"
 fetch_tool "aria2c" "$(aria2c_url)" "archive" "aria2c${EXE_SUFFIX}"
+
+# Required, like the three tools above: without it the bundled ffmpeg cannot
+# open a single HTTPS URL, which is every URL yt-dlp hands it.
+fetch_cacert
+
+# deno is optional (see header comment). fetch_tool() calls fail() on any
+# problem, and fail() calls `exit` unconditionally — correct for the three
+# required tools above (a bare top-level `exit` always terminates the
+# whole script, regardless of `set -e` state), but wrong for an optional
+# one. Running the call in a subshell contains that `exit` to the
+# subshell only: the parent script just observes a non-zero exit status
+# here and carries on. Note this is *not* achievable by writing
+# `if ! fetch_tool ...; then ...; fi` directly (without the subshell):
+# bash disables `set -e` propagation for a command's entire nested call
+# tree while that command's own exit status is being tested by an `if`,
+# so a failure deep inside download()/verify_checksum_for() would be
+# logged but silently fail to stop execution, right up to reporting a
+# false success — verified empirically while building this.
+#
+# FETCHED/SKIPPED are ordinary shell arrays, so mutations fetch_tool()
+# makes to them inside the subshell do not survive back to this parent
+# shell. To keep the summary below accurate without duplicating
+# fetch_tool()'s own bookkeeping logic, the subshell itself records which
+# array it appended to (and the exact entry) in DENO_STATUS_FILE, and the
+# parent replays that single append after the subshell exits.
+DENO_FAILED=0
+DENO_STATUS_FILE="$TMP_ROOT/deno-status"
+if (
+      fetched_before_count="${#FETCHED[@]}"
+      fetch_tool "deno" "$(deno_url)" "archive" "deno${EXE_SUFFIX}"
+      if [ "${#FETCHED[@]}" -gt "$fetched_before_count" ]; then
+        printf 'FETCHED|%s\n' "${FETCHED[${#FETCHED[@]}-1]}" > "$DENO_STATUS_FILE"
+      else
+        printf 'SKIPPED|%s\n' "${SKIPPED[${#SKIPPED[@]}-1]}" > "$DENO_STATUS_FILE"
+      fi
+    )
+then
+  if [ -f "$DENO_STATUS_FILE" ]; then
+    deno_status_which=""
+    deno_status_entry=""
+    IFS='|' read -r deno_status_which deno_status_entry < "$DENO_STATUS_FILE"
+    case "$deno_status_which" in
+      FETCHED) FETCHED+=("$deno_status_entry") ;;
+      SKIPPED) SKIPPED+=("$deno_status_entry") ;;
+    esac
+  fi
+else
+  DENO_FAILED=1
+  log "WARNING: deno (optional JS runtime for yt-dlp) could not be fetched — continuing without it. yt-dlp will warn 'No supported JavaScript runtime could be found' and YouTube downloads/previews that require a muxed format may fail until deno (or another supported runtime) is available."
+fi
 
 # ---------------------------------------------------------------------------
 # Summary
@@ -510,5 +693,9 @@ if [ "${#SKIPPED[@]}" -gt 0 ]; then
     IFS='|' read -r name path size <<< "$entry"
     log "  - $name -> $path ($size)"
   done
+fi
+if [ "$DENO_FAILED" -eq 1 ]; then
+  log ""
+  log "NOTE: deno (optional JS runtime for yt-dlp) was not fetched — see WARNING above."
 fi
 log "=========================================================="

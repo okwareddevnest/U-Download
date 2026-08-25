@@ -12,6 +12,7 @@
 
 use crate::binary_manager;
 use crate::jobs::{JobId, JobProgress, JobStatus, SharedJobs};
+use crate::proc;
 use crate::queue;
 use crate::ytdlp::{build_download_args, parse_progress_line, DownloadSpec};
 use std::io::Read;
@@ -33,6 +34,10 @@ pub struct RunnerContext {
     pub ffmpeg: PathBuf,
     pub binaries_dir: PathBuf,
     pub concurrency: u32,
+    /// The JavaScript runtime yt-dlp should be told about, if this machine has
+    /// one. `None` is a supported state: the download then runs with exactly
+    /// the arguments it used before runtimes were wired in.
+    pub js_runtime: Option<binary_manager::JsRuntime>,
 }
 
 /// Sends the current state of one job to the frontend.
@@ -136,6 +141,28 @@ impl RecordSplitter {
     }
 }
 
+/// Turns one parsed progress record into a percentage, or `None` if it carries
+/// no usable one.
+///
+/// ffmpeg — the downloader on every trimmed job — reports a position on the
+/// media timeline and no percentage at all, because it does not know how long
+/// the requested section is. This function does: `section_seconds` is the span
+/// of the job's own trim range. Without this the whole trim path reported 0%
+/// until the runner force-wrote 100 at the end.
+///
+/// An ffmpeg position with no known section length yields `None` rather than
+/// 0.0: an untrimmed job's post-download merge also prints these lines, and
+/// writing 0% there would undo the real progress aria2c had already reported.
+fn percentage_from(p: &crate::ytdlp::ProgressLine, section_seconds: Option<f64>) -> Option<f64> {
+    match p.out_time_seconds {
+        None => Some(p.percentage),
+        Some(position) => match section_seconds {
+            Some(total) if total > 0.0 => Some((position / total * 100.0).clamp(0.0, 100.0)),
+            _ => None,
+        },
+    }
+}
+
 /// Applies one record of downloader output to the job.
 ///
 /// Split out so the reader loop and the end-of-stream fragment go through
@@ -147,6 +174,7 @@ fn consume_record<R: Runtime>(
     record: &str,
     output_path: &mut Option<String>,
     last_emit: &mut std::time::Instant,
+    section_seconds: Option<f64>,
 ) {
     if let Some(path) = destination_from_line(record) {
         *output_path = Some(path);
@@ -157,23 +185,27 @@ fn consume_record<R: Runtime>(
         return;
     };
 
+    let Some(percentage) = percentage_from(&p, section_seconds) else {
+        return;
+    };
+
     let total_bytes = p.total_bytes.unwrap_or(0);
     {
         // Lock scope: one map write, once per progress record.
         jobs.lock().unwrap().update_progress(
             id,
             JobProgress {
-                percentage: p.percentage,
+                percentage,
                 speed_bytes_per_sec: p.speed_bytes_per_sec.unwrap_or(0),
                 eta_seconds: p.eta_seconds,
-                bytes_downloaded: (total_bytes as f64 * p.percentage / 100.0) as u64,
+                bytes_downloaded: (total_bytes as f64 * percentage / 100.0) as u64,
                 total_bytes,
             },
         );
     }
 
     let due = last_emit.elapsed().as_millis() >= PROGRESS_EMIT_INTERVAL_MS;
-    if due || p.percentage >= 100.0 {
+    if due || percentage >= 100.0 {
         emit_job(window, jobs, id);
         *last_emit = std::time::Instant::now();
     }
@@ -204,11 +236,30 @@ pub fn run_job<R: Runtime>(window: Window<R>, jobs: SharedJobs, id: JobId, ctx: 
     // Trimming lives entirely in these arguments (`--download-sections` plus
     // `--force-keyframes-at-cuts`). There is deliberately no FFmpeg post-pass:
     // the `-c copy` cut it used to perform could only land on a keyframe.
-    let args = build_download_args(&spec, &ctx.ffmpeg.to_string_lossy());
+    // Recent yt-dlp cannot resolve a YouTube format without a JS runtime, so
+    // without this the selectors above fail as "Requested format is not
+    // available"; `None` reproduces the pre-runtime command line exactly.
+    let js_runtime = ctx.js_runtime.as_ref().map(|rt| rt.flag_value());
+    let args = build_download_args(
+        &spec,
+        &ctx.ffmpeg.to_string_lossy(),
+        js_runtime.as_deref(),
+    );
+
+    // The span of the requested section, which is what ffmpeg's timeline
+    // progress has to be measured against on a trimmed job. `None` for an
+    // untrimmed one, where progress is byte-based and this is not consulted.
+    let section_seconds = spec
+        .trim
+        .map(|range| range.end - range.start)
+        .filter(|span| *span > 0.0);
 
     let mut cmd = Command::new(&ctx.yt_dlp);
     binary_manager::augment_path_env(&mut cmd, &ctx.binaries_dir);
     cmd.args(&args).stdout(Stdio::piped()).stderr(Stdio::piped());
+    // So that cancelling reaches the process actually doing the download —
+    // ffmpeg on a trimmed job, aria2c otherwise — and not just yt-dlp.
+    proc::spawn_in_own_process_group(&mut cmd);
 
     // Spawned with no lock held.
     let mut child = match cmd.spawn() {
@@ -225,11 +276,61 @@ pub fn run_job<R: Runtime>(window: Window<R>, jobs: SharedJobs, id: JobId, ctx: 
     // Drained on its own thread. Reading stderr only after stdout closes would
     // deadlock the moment yt-dlp writes more warnings than the pipe buffer
     // holds, because it would then block before finishing its stdout output.
+    //
+    // It is also where a trimmed job's progress lives. ffmpeg writes its
+    // `frame=… time=…` readout to stderr, not stdout, and on the
+    // `--download-sections` path ffmpeg is the only thing reporting anything —
+    // so parsing the ffmpeg line shape without also routing stderr through the
+    // parser would leave the trim path exactly as blind as before. The same
+    // `RecordSplitter` is used because ffmpeg redraws that readout with a
+    // carriage return, just as aria2c does.
     let stderr_reader = stderr.map(|mut stderr| {
+        let (window, jobs, id) = (window.clone(), jobs.clone(), id.clone());
         std::thread::spawn(move || {
-            let mut text = String::new();
-            let _ = stderr.read_to_string(&mut text);
-            text
+            let mut raw: Vec<u8> = Vec::new();
+            let mut splitter = RecordSplitter::default();
+            let mut chunk = [0u8; 4096];
+            let mut last_emit = std::time::Instant::now();
+            // yt-dlp names its output file on stdout, never here; this exists
+            // only to satisfy the shared signature and is intentionally dropped.
+            let mut ignored_path: Option<String> = None;
+
+            loop {
+                let read = match stderr.read(&mut chunk) {
+                    Ok(0) | Err(_) => break,
+                    Ok(read) => read,
+                };
+                raw.extend_from_slice(&chunk[..read]);
+                for record in splitter.push(&chunk[..read]) {
+                    consume_record(
+                        &window,
+                        &jobs,
+                        &id,
+                        &record,
+                        &mut ignored_path,
+                        &mut last_emit,
+                        section_seconds,
+                    );
+                }
+            }
+
+            // ffmpeg's last readout, like aria2c's, has no terminator.
+            if let Some(record) = splitter.take_pending() {
+                consume_record(
+                    &window,
+                    &jobs,
+                    &id,
+                    &record,
+                    &mut ignored_path,
+                    &mut last_emit,
+                    section_seconds,
+                );
+            }
+
+            // Decoded once at the end rather than per chunk, so a multi-byte
+            // character straddling a chunk boundary is not mangled in the text
+            // that becomes the user-visible error message.
+            String::from_utf8_lossy(&raw).into_owned()
         })
     });
 
@@ -257,7 +358,7 @@ pub fn run_job<R: Runtime>(window: Window<R>, jobs: SharedJobs, id: JobId, ctx: 
         // nobody else can kill it. Killed and reaped here, outside the lock.
         // The status the other caller published stands, and it has already
         // emitted for it, so this thread reports nothing.
-        let _ = child.kill();
+        proc::kill_tree(&mut child);
         let _ = child.wait();
         return;
     }
@@ -290,6 +391,7 @@ pub fn run_job<R: Runtime>(window: Window<R>, jobs: SharedJobs, id: JobId, ctx: 
                     &record,
                     &mut output_path,
                     &mut last_emit,
+                    section_seconds,
                 );
             }
         }
@@ -297,7 +399,15 @@ pub fn run_job<R: Runtime>(window: Window<R>, jobs: SharedJobs, id: JobId, ctx: 
         // aria2c's final readout has no terminator at all, so the last
         // progress update only exists as this fragment.
         if let Some(record) = splitter.take_pending() {
-            consume_record(&window, &jobs, &id, &record, &mut output_path, &mut last_emit);
+            consume_record(
+                &window,
+                &jobs,
+                &id,
+                &record,
+                &mut output_path,
+                &mut last_emit,
+                section_seconds,
+            );
         }
     }
 
@@ -399,7 +509,7 @@ pub fn pump<R: Runtime>(window: Window<R>, jobs: SharedJobs, ctx: RunnerContext)
 
 #[cfg(test)]
 mod tests {
-    use super::{destination_from_line, RecordSplitter};
+    use super::{destination_from_line, percentage_from, RecordSplitter};
     use crate::ytdlp::parse_progress_line;
 
     /// Feeds the whole stream as one chunk and closes it.
@@ -514,5 +624,68 @@ mod tests {
     fn ignores_progress_and_other_chatter() {
         assert!(destination_from_line("[download]  42.0% of 10.00MiB at 1.00MiB/s").is_none());
         assert!(destination_from_line("[youtube] Extracting URL: https://e/v").is_none());
+    }
+
+    fn pct_of(record: &str, section_seconds: Option<f64>) -> Option<f64> {
+        let parsed = parse_progress_line(record)?;
+        percentage_from(&parsed, section_seconds)
+    }
+
+    // The whole of FIX 2: ffmpeg reports a timeline position, the runner owns
+    // the section length, and only together do they make a percentage.
+    #[test]
+    fn an_ffmpeg_position_becomes_a_percentage_of_the_requested_section() {
+        let line = "frame=  150 fps= 36 q=32.0 Lsize=  358KiB time=00:00:05.00 bitrate= 586.2kbits/s speed=1.21x";
+        assert_eq!(pct_of(line, Some(20.0)), Some(25.0));
+    }
+
+    // ffmpeg can overshoot the requested end slightly when it re-encodes the
+    // boundary GOP; a bar past 100% would be a visible defect.
+    #[test]
+    fn an_ffmpeg_overshoot_is_clamped_to_one_hundred() {
+        let line = "frame=  150 fps= 36 q=32.0 size=  358KiB time=00:00:21.00 bitrate=N/A speed=1.21x";
+        assert_eq!(pct_of(line, Some(20.0)), Some(100.0));
+    }
+
+    // An untrimmed job's merge pass also prints ffmpeg readouts. With no
+    // section length there is no percentage to compute, and writing 0 would
+    // wipe out the real progress aria2c had already reported.
+    #[test]
+    fn an_ffmpeg_line_on_an_untrimmed_job_reports_nothing_rather_than_zero() {
+        let line = "frame=  150 fps= 36 q=32.0 size=  358KiB time=00:00:05.00 bitrate=N/A speed=1.21x";
+        assert_eq!(pct_of(line, None), None);
+    }
+
+    // Regression guard: byte-based progress must be passed through untouched,
+    // whether or not a section length happens to be known.
+    #[test]
+    fn byte_based_progress_is_unaffected_by_the_section_length() {
+        let ytdlp = "[download]  42.5% of  120.50MiB at   3.20MiB/s ETA 00:22";
+        assert_eq!(pct_of(ytdlp, None), Some(42.5));
+        assert_eq!(pct_of(ytdlp, Some(20.0)), Some(42.5));
+
+        let aria = "[#f1a2b3 1.2MiB/10MiB(12%) CN:16 DL:2.1MiB ETA:4s]";
+        assert_eq!(pct_of(aria, None), Some(12.0));
+        assert_eq!(pct_of(aria, Some(20.0)), Some(12.0));
+    }
+
+    // End to end over the splitter, as for aria2c: ffmpeg redraws its readout
+    // with carriage returns and leaves the last one unterminated, so every
+    // update must survive that on the way to a percentage.
+    #[test]
+    fn an_ffmpeg_readout_stream_yields_every_update() {
+        let stream: &[&[u8]] = &[
+            b"frame=   0 fps=0.0 q=0.0 size=N/A time=N/A bitrate=N/A speed=N/A\rframe=  25 fps=25 q=28.0 size=  64KiB time=00:00:0",
+            b"1.00 bitrate=N/A speed=1.0x\rframe= 250 fps=25 q=-1.0 Lsize= 640KiB time=00:00:10.00 bitrate=N/A speed=1.0x",
+        ];
+
+        let percentages: Vec<Option<f64>> = split_chunks(stream)
+            .iter()
+            .filter_map(|record| parse_progress_line(record))
+            .map(|p| percentage_from(&p, Some(10.0)))
+            .collect();
+
+        // The `time=N/A` record parses to nothing at all and never reaches here.
+        assert_eq!(percentages, vec![Some(10.0), Some(100.0)]);
     }
 }

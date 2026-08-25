@@ -16,6 +16,7 @@ use tauri_plugin_dialog::DialogExt;
 mod binary_manager;
 mod jobs;
 mod probe;
+mod proc;
 mod queue;
 mod runner;
 mod ytdlp;
@@ -231,6 +232,29 @@ async fn test_dependencies<R: Runtime>(app_handle: AppHandle<R>) -> Result<Strin
         }
     }
 
+    // Reported because its absence is silent until a download fails: the
+    // bundled ffmpeg is built against OpenSSL with no trust store of its own,
+    // so with no CA bundle every HTTPS fetch it makes — including every
+    // trimmed download, which yt-dlp routes through ffmpeg — dies with
+    // "certificate verify failed".
+    match &paths.ca_cert {
+        Some(ca) => results.push(format!("✅ CA bundle: {}", ca.display())),
+        None => results.push(
+            "⚠️ CA bundle: none found — HTTPS fetches made by ffmpeg may fail certificate verification"
+                .to_string(),
+        ),
+    }
+
+    // Reported because it is optional and its absence is silent otherwise: with
+    // no JS runtime, recent yt-dlp finds no usable YouTube format at all.
+    match binary_manager::resolve_js_runtime(&paths) {
+        Some(rt) => results.push(format!("✅ JS runtime: {} ({})", rt.name, rt.path.display())),
+        None => results.push(
+            "⚠️ JS runtime: none found — YouTube extraction may return no usable formats"
+                .to_string(),
+        ),
+    }
+
     Ok(results.join("\n"))
 }
 
@@ -250,11 +274,13 @@ fn runner_context<R: Runtime>(
 ) -> Result<runner::RunnerContext, String> {
     let paths = binary_manager::resolve_paths(window.app_handle())?;
     binary_manager::ensure_executable(&paths)?;
+    let js_runtime = binary_manager::resolve_js_runtime(&paths);
     Ok(runner::RunnerContext {
         yt_dlp: paths.yt_dlp,
         ffmpeg: paths.ffmpeg,
         binaries_dir: paths.dir,
         concurrency: concurrency.max(1),
+        js_runtime,
     })
 }
 

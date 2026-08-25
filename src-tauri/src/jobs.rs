@@ -165,7 +165,16 @@ impl JobRegistry {
         }
     }
 
-    /// Kills the running process, if any, and marks the job cancelled.
+    /// Kills the running process *and everything it spawned*, then marks the
+    /// job cancelled.
+    ///
+    /// The whole process group is signalled, not just yt-dlp. yt-dlp does not
+    /// do the downloading itself: trimmed jobs are fetched by an ffmpeg child
+    /// and untrimmed ones by aria2c. Killing only yt-dlp left that grandchild
+    /// running — it went on writing the output file, so a job the UI called
+    /// cancelled still produced one, and it held the inherited pipes open, so
+    /// the runner's reader threads blocked until it finished anyway. See
+    /// `crate::proc`.
     ///
     /// The kill and the reap run on a short-lived detached thread. `cancel`
     /// takes `&mut self`, so every caller holds the shared registry mutex
@@ -180,7 +189,7 @@ impl JobRegistry {
         }
         if let Some(mut child) = child {
             std::thread::spawn(move || {
-                let _ = child.kill();
+                crate::proc::kill_tree(&mut child);
                 let _ = child.wait();
             });
         }

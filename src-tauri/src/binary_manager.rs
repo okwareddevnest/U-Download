@@ -7,6 +7,42 @@ pub struct BinaryPaths {
     pub yt_dlp: PathBuf,
     pub aria2c: PathBuf,
     pub ffmpeg: PathBuf,
+    /// The bundled JavaScript runtime, when this install has one.
+    ///
+    /// Optional on purpose. Recent yt-dlp needs a JS runtime to extract
+    /// YouTube formats at all, but installs that predate the deno addition —
+    /// and platforms whose deno has not been fetched yet — must keep working
+    /// exactly as before rather than refusing to start. Its absence therefore
+    /// never fails resolution; see `resolve_js_runtime` for the fallback.
+    pub deno: Option<PathBuf>,
+    /// The CA certificate bundle the child processes should trust, if one
+    /// could be found at all.
+    ///
+    /// The bundled ffmpeg is built against OpenSSL and ships no trust store,
+    /// so without this every HTTPS URL it opens fails verification — which is
+    /// the whole trim path, since yt-dlp hands `--download-sections` fetches
+    /// to ffmpeg. Optional for the same reason `deno` is: an install made
+    /// before `cacert.pem` was added to the fetch script, on a machine with no
+    /// system trust store either, must still start. See `resolve_ca_bundle`.
+    pub ca_cert: Option<PathBuf>,
+}
+
+/// A JavaScript runtime yt-dlp can be pointed at, as the name yt-dlp knows it
+/// by plus the executable's location.
+///
+/// yt-dlp enables only `deno` by default, so even a runtime already installed
+/// on the machine has to be named explicitly on the command line.
+#[derive(Debug, Clone)]
+pub struct JsRuntime {
+    pub name: &'static str,
+    pub path: PathBuf,
+}
+
+impl JsRuntime {
+    /// The value yt-dlp's `--js-runtimes` flag takes: `<name>:<path>`.
+    pub fn flag_value(&self) -> String {
+        format!("{}:{}", self.name, self.path.display())
+    }
 }
 
 fn platform_dir() -> &'static str {
@@ -58,6 +94,83 @@ fn exe_name(base: &str) -> String {
     { base.to_string() }
 }
 
+/// Looks for the bundled JS runtime in the directory yt-dlp was found in.
+///
+/// Returns `None` when the file is not there, which is the expected state for
+/// every install made before deno was added to the fetch script. Resolution of
+/// the three required binaries is unaffected either way.
+fn optional_deno_beside(yt_dlp: &Path) -> Option<PathBuf> {
+    let candidate = yt_dlp.parent()?.join(exe_name("deno"));
+    if candidate.exists() {
+        eprintln!("✅ Found bundled JS runtime: {}", candidate.display());
+        Some(candidate)
+    } else {
+        None
+    }
+}
+
+/// The filename `scripts/fetch-binaries.sh` installs the CA bundle under, in
+/// the same directory as the binaries.
+pub const CA_BUNDLE_NAME: &str = "cacert.pem";
+
+/// Trust stores the host OS may provide, tried in order only when this install
+/// has no bundled one. macOS/BSD first, then Debian/Ubuntu, then RHEL/Fedora.
+///
+/// Deliberately the fallback rather than the primary mechanism: these paths
+/// differ per distribution, are absent from some minimal images, and none of
+/// them exist on Windows at all. Only the bundled file behaves identically
+/// everywhere.
+const SYSTEM_CA_CANDIDATES: [&str; 3] = [
+    "/etc/ssl/cert.pem",
+    "/etc/ssl/certs/ca-certificates.crt",
+    "/etc/pki/tls/certs/ca-bundle.crt",
+];
+
+/// The resolution order itself, with the system candidate list injected so it
+/// can be exercised in a test without depending on what the host happens to
+/// have in /etc.
+fn resolve_ca_bundle_from(dir: &Path, system_candidates: &[&str]) -> Option<PathBuf> {
+    let bundled = dir.join(CA_BUNDLE_NAME);
+    if bundled.is_file() {
+        return Some(bundled);
+    }
+    system_candidates
+        .iter()
+        .map(PathBuf::from)
+        .find(|candidate| candidate.is_file())
+}
+
+/// Picks the CA bundle to point OpenSSL-backed children at: the one bundled
+/// beside the binaries, else the first system trust store that exists, else
+/// `None`.
+///
+/// `None` is a supported outcome, not an error: the child then runs with
+/// exactly the environment it had before this existed. Degrading to today's
+/// (broken-on-HTTPS) behaviour is still better than refusing to launch an
+/// install that predates the bundled file.
+pub fn resolve_ca_bundle(dir: &Path) -> Option<PathBuf> {
+    resolve_ca_bundle_from(dir, &SYSTEM_CA_CANDIDATES)
+}
+
+/// Assembles a `BinaryPaths` once the three required binaries have been
+/// located, resolving the optional extras that live beside them (the JS
+/// runtime and the CA bundle) in one place so every resolution strategy
+/// produces an identically-populated value.
+fn assemble_paths(dir: PathBuf, yt_dlp: PathBuf, aria2c: PathBuf, ffmpeg: PathBuf) -> BinaryPaths {
+    let deno = optional_deno_beside(&yt_dlp);
+    let ca_cert = resolve_ca_bundle(&dir);
+    match ca_cert.as_ref() {
+        Some(ca) => eprintln!("\u{1f512} Using CA bundle: {}", ca.display()),
+        None => eprintln!(
+            "\u{26a0}\u{fe0f}  No CA bundle found (no {} beside the binaries, none of {} present). \
+             HTTPS fetches made by ffmpeg may fail certificate verification.",
+            CA_BUNDLE_NAME,
+            SYSTEM_CA_CANDIDATES.join(", ")
+        ),
+    }
+    BinaryPaths { dir, yt_dlp, aria2c, ffmpeg, deno, ca_cert }
+}
+
 /// Try to resolve binaries from the application resource directory (production builds)
 fn try_resolve_in_resources<R: Runtime>(
     app: &AppHandle<R>,
@@ -80,7 +193,7 @@ fn try_resolve_in_resources<R: Runtime>(
         if yt.exists() && ar.exists() && ff.exists() {
             let dir = resource_dir.canonicalize().unwrap_or(resource_dir);
             eprintln!("✅ Found binaries in resource directory: {}", dir.display());
-            return Some(BinaryPaths { dir, yt_dlp: yt, aria2c: ar, ffmpeg: ff });
+            return Some(assemble_paths(dir, yt, ar, ff));
         }
     }
     
@@ -99,7 +212,7 @@ fn try_resolve_in_resources<R: Runtime>(
         if yt.exists() && ar.exists() && ff.exists() {
             let dir = platform_dir.canonicalize().unwrap_or(platform_dir);
             eprintln!("✅ Found binaries in binaries root: {}", dir.display());
-            return Some(BinaryPaths { dir, yt_dlp: yt, aria2c: ar, ffmpeg: ff });
+            return Some(assemble_paths(dir, yt, ar, ff));
         }
     }
     
@@ -175,7 +288,7 @@ fn try_resolve_near_executable(
         if yt.exists() && ar.exists() && ff.exists() {
             let dir = yt.parent().unwrap_or(Path::new(".")).to_path_buf();
             eprintln!("✅ Found binaries near executable: {}", dir.display());
-            return Some(BinaryPaths { dir, yt_dlp: yt, aria2c: ar, ffmpeg: ff });
+            return Some(assemble_paths(dir, yt, ar, ff));
         }
     }
     None
@@ -203,12 +316,7 @@ fn try_resolve_target_dir(
             
             if yt.exists() && ar.exists() && ff.exists() {
                 eprintln!("✅ Found binaries in target directory: {}", target_binaries_dir.display());
-                return Some(BinaryPaths {
-                    dir: target_binaries_dir,
-                    yt_dlp: yt,
-                    aria2c: ar,
-                    ffmpeg: ff,
-                });
+                return Some(assemble_paths(target_binaries_dir, yt, ar, ff));
             }
         }
     }
@@ -237,12 +345,7 @@ fn try_resolve_dev_paths(
             
             if ar.exists() && ff.exists() {
                 eprintln!("✅ Found binaries in dev mode: {}", parent.display());
-                return Some(BinaryPaths {
-                    dir: parent.to_path_buf(),
-                    yt_dlp: direct_path,
-                    aria2c: ar,
-                    ffmpeg: ff,
-                });
+                return Some(assemble_paths(parent.to_path_buf(), direct_path, ar, ff));
             }
         }
     }
@@ -262,12 +365,7 @@ fn try_resolve_dev_paths(
                 
                 if ar.exists() && ff.exists() {
                     eprintln!("✅ Found binaries in absolute dev path: {}", parent.display());
-                    return Some(BinaryPaths {
-                        dir: parent.to_path_buf(),
-                        yt_dlp: abs_path,
-                        aria2c: ar,
-                        ffmpeg: ff,
-                    });
+                    return Some(assemble_paths(parent.to_path_buf(), abs_path, ar, ff));
                 }
             }
         }
@@ -388,12 +486,98 @@ pub fn resolve_paths<R: Runtime>(app: &AppHandle<R>) -> Result<BinaryPaths, Stri
     ))
 }
 
+/// Names of the JS runtimes yt-dlp supports, in yt-dlp's own priority order.
+/// `quickjs` is omitted: it is not something a machine is likely to have on
+/// PATH under that name, and the fallback exists for interpreters that are.
+const PATH_RUNTIME_CANDIDATES: [&str; 3] = ["deno", "node", "bun"];
+
+/// Looks one executable up on `PATH`, the way a shell would.
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let file = exe_name(name);
+    let path_var = std::env::var_os("PATH")?;
+    for dir in std::env::split_paths(&path_var) {
+        if dir.as_os_str().is_empty() {
+            continue;
+        }
+        let candidate = dir.join(&file);
+        if !candidate.is_file() {
+            continue;
+        }
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let executable = std::fs::metadata(&candidate)
+                .map(|m| m.permissions().mode() & 0o111 != 0)
+                .unwrap_or(false);
+            if !executable {
+                continue;
+            }
+        }
+        return Some(candidate);
+    }
+    None
+}
+
+/// Picks the JavaScript runtime to hand yt-dlp, or `None` if the machine has
+/// none.
+///
+/// Recent yt-dlp cannot extract YouTube formats without one — with no runtime
+/// it reports zero muxed formats, which makes preview fall back to a proxy
+/// download that then fails too, and plain downloads fail as "Requested format
+/// is not available".
+///
+/// Order: the bundled deno first (known-good version, no user setup), then any
+/// runtime already installed on the machine. Returning `None` is a supported
+/// outcome — callers then invoke yt-dlp exactly as they did before this
+/// existed, so a missing runtime degrades quality rather than breaking the app.
+pub fn resolve_js_runtime(paths: &BinaryPaths) -> Option<JsRuntime> {
+    if let Some(path) = paths.deno.clone() {
+        return Some(JsRuntime { name: "deno", path });
+    }
+
+    for name in PATH_RUNTIME_CANDIDATES {
+        if let Some(path) = find_on_path(name) {
+            eprintln!("🔧 Using JS runtime from PATH: {} ({})", name, path.display());
+            return Some(JsRuntime { name, path });
+        }
+    }
+
+    eprintln!(
+        "⚠️  No JavaScript runtime found (bundled deno absent; none of {} on PATH). \
+         YouTube extraction may return no usable formats.",
+        PATH_RUNTIME_CANDIDATES.join(", ")
+    );
+    None
+}
+
+/// Appends `--js-runtimes <name>:<path>` when a runtime is available.
+///
+/// A single place so that every yt-dlp invocation spells the flag identically;
+/// an app where preview passes it and download does not is worse than one that
+/// passes it nowhere.
+pub fn push_js_runtime_args(args: &mut Vec<String>, runtime: Option<&JsRuntime>) {
+    if let Some(runtime) = runtime {
+        args.push("--js-runtimes".to_string());
+        args.push(runtime.flag_value());
+    }
+}
+
 /// Ensure binaries have executable permissions on Unix systems
 pub fn ensure_executable(paths: &BinaryPaths) -> Result<(), String> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
-        for (name, p) in [("yt-dlp", &paths.yt_dlp), ("aria2c", &paths.aria2c), ("ffmpeg", &paths.ffmpeg)] {
+        let mut targets: Vec<(&str, &PathBuf)> = vec![
+            ("yt-dlp", &paths.yt_dlp),
+            ("aria2c", &paths.aria2c),
+            ("ffmpeg", &paths.ffmpeg),
+        ];
+        // Only when this install actually bundles one; a missing runtime is a
+        // supported state, not something to chmod or complain about.
+        if let Some(deno) = paths.deno.as_ref() {
+            targets.push(("deno", deno));
+        }
+        for (name, p) in targets {
             if let Ok(meta) = std::fs::metadata(p) {
                 let mut perms = meta.permissions();
                 let mode = perms.mode();
@@ -413,7 +597,11 @@ pub fn ensure_executable(paths: &BinaryPaths) -> Result<(), String> {
     Ok(())
 }
 
-/// Add the binary directory to PATH environment variable for a command
+/// Prepares the environment of a command that will run one of the bundled
+/// tools: the binary directory on `PATH`, and a CA bundle OpenSSL can find.
+///
+/// Both halves matter to yt-dlp specifically, because yt-dlp spawns ffmpeg as
+/// a child and the child inherits this environment.
 pub fn augment_path_env(cmd: &mut std::process::Command, dir: &Path) {
     if let Ok(cur) = std::env::var("PATH") {
         #[cfg(target_os = "windows")]
@@ -426,5 +614,159 @@ pub fn augment_path_env(cmd: &mut std::process::Command, dir: &Path) {
     } else {
         cmd.env("PATH", dir);
         eprintln!("🔧 Set PATH to {}", dir.display());
+    }
+
+    apply_ca_env(cmd, dir);
+}
+
+/// Sets `SSL_CERT_FILE` so the OpenSSL-backed ffmpeg this command will run (or
+/// spawn) has a trust store to verify against.
+///
+/// Without it the bundled ffmpeg fails every HTTPS input with
+/// "error:0A000086:SSL routines::certificate verify failed", because the build
+/// is `--enable-openssl` and carries no certificates. That takes the trim path
+/// down with it: yt-dlp performs `--download-sections` fetches through ffmpeg.
+///
+/// `SSL_CERT_DIR` is deliberately left alone. It names a directory of
+/// hash-named certificate links, which is not what either the bundled file's
+/// directory or a bundle file's parent is; setting it would replace OpenSSL's
+/// own default directory with a useless one for no gain, since `SSL_CERT_FILE`
+/// is what resolves the lookup here.
+fn apply_ca_env(cmd: &mut std::process::Command, dir: &Path) {
+    // A trust store the user configured themselves wins: it is already in this
+    // process's environment, the child inherits it untouched, and overriding it
+    // would break anyone pointing at a corporate/proxy CA on purpose.
+    if let Some(existing) = std::env::var_os("SSL_CERT_FILE") {
+        if !existing.is_empty() {
+            eprintln!(
+                "🔒 Honouring SSL_CERT_FILE already set in the environment: {}",
+                Path::new(&existing).display()
+            );
+            return;
+        }
+    }
+
+    match resolve_ca_bundle(dir) {
+        Some(ca) => {
+            eprintln!("🔒 SSL_CERT_FILE={}", ca.display());
+            cmd.env("SSL_CERT_FILE", ca);
+        }
+        // Degrade, never fail: an install predating the bundled cacert.pem, on
+        // a machine with no system trust store either, runs exactly as it did
+        // before this existed.
+        None => eprintln!(
+            "⚠️  No CA bundle to point SSL_CERT_FILE at (looked for {} in {}, then {}). \
+             HTTPS fetches made by ffmpeg may fail certificate verification.",
+            CA_BUNDLE_NAME,
+            dir.display(),
+            SYSTEM_CA_CANDIDATES.join(", ")
+        ),
+    }
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// A scratch directory of this test's own. `tempfile` is not a dependency
+    /// of this crate and this is not worth adding one for: a per-process,
+    /// per-call name under the system temp dir is enough for path-shape tests.
+    struct ScratchDir(PathBuf);
+
+    impl ScratchDir {
+        fn new(tag: &str) -> Self {
+            static COUNTER: AtomicU32 = AtomicU32::new(0);
+            let path = std::env::temp_dir().join(format!(
+                "udl-ca-test-{}-{}-{}",
+                tag,
+                std::process::id(),
+                COUNTER.fetch_add(1, Ordering::Relaxed)
+            ));
+            std::fs::create_dir_all(&path).expect("scratch dir should be creatable");
+            Self(path)
+        }
+
+        fn path(&self) -> &Path {
+            &self.0
+        }
+
+        fn write(&self, name: &str, contents: &str) -> PathBuf {
+            let file = self.0.join(name);
+            std::fs::write(&file, contents).expect("scratch file should be writable");
+            file
+        }
+    }
+
+    impl Drop for ScratchDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    #[test]
+    fn ca_resolution_prefers_the_bundled_file() {
+        let bundle_dir = ScratchDir::new("bundled");
+        let bundled = bundle_dir.write(CA_BUNDLE_NAME, "-----BEGIN CERTIFICATE-----\n");
+
+        let system = ScratchDir::new("system");
+        let system_store = system.write("ca-certificates.crt", "-----BEGIN CERTIFICATE-----\n");
+        let candidates = [system_store.to_str().unwrap()];
+
+        assert_eq!(
+            resolve_ca_bundle_from(bundle_dir.path(), &candidates),
+            Some(bundled),
+            "the bundled cacert.pem must win over an existing system trust store"
+        );
+    }
+
+    #[test]
+    fn ca_resolution_falls_back_to_the_first_existing_system_store() {
+        // No cacert.pem beside the binaries: the state of every install made
+        // before the fetch script started shipping one.
+        let bundle_dir = ScratchDir::new("no-bundled");
+
+        let system = ScratchDir::new("system-order");
+        let second = system.write("ca-bundle.crt", "-----BEGIN CERTIFICATE-----\n");
+        let missing = system.path().join("does-not-exist.pem");
+        let third = system.write("cert.pem", "-----BEGIN CERTIFICATE-----\n");
+
+        let candidates = [
+            missing.to_str().unwrap(),
+            second.to_str().unwrap(),
+            third.to_str().unwrap(),
+        ];
+
+        assert_eq!(
+            resolve_ca_bundle_from(bundle_dir.path(), &candidates),
+            Some(second),
+            "the first candidate that exists wins, and missing ones are skipped"
+        );
+    }
+
+    #[test]
+    fn ca_resolution_yields_none_when_nothing_exists() {
+        let bundle_dir = ScratchDir::new("nothing");
+        let absent = bundle_dir.path().join("nowhere.pem");
+
+        assert_eq!(
+            resolve_ca_bundle_from(bundle_dir.path(), &[absent.to_str().unwrap()]),
+            None,
+            "no bundled file and no system store must degrade to None, not panic or invent a path"
+        );
+    }
+
+    #[test]
+    fn a_directory_named_like_the_bundle_is_not_mistaken_for_it() {
+        let bundle_dir = ScratchDir::new("dir-not-file");
+        std::fs::create_dir_all(bundle_dir.path().join(CA_BUNDLE_NAME))
+            .expect("directory should be creatable");
+
+        assert_eq!(
+            resolve_ca_bundle_from(bundle_dir.path(), &[]),
+            None,
+            "only a regular file counts as a bundle"
+        );
     }
 }
