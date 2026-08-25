@@ -14,10 +14,10 @@
     "windows": [
       {
         "title": "U-Download",
-        "width": 900,
-        "height": 700,
-        "minWidth": 600,
-        "minHeight": 500,
+        "width": 1200,
+        "height": 800,
+        "minWidth": 960,
+        "minHeight": 680,
         "center": true,
         "resizable": true,
         "maximizable": true,

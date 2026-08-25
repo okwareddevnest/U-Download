@@ -1,10 +1,22 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="light">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/vite.svg" />
+    <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Tauri + React</title>
+    <meta name="color-scheme" content="light dark" />
+    <title>U-Download</title>
+    <script>
+      // Paint the saved theme before the first frame. Without this the window
+      // opens light for one frame and then snaps dark, which on a night desk
+      // is the most visible thing the app does.
+      try {
+        var saved = localStorage.getItem("isDarkMode");
+        if (saved && JSON.parse(saved)) {
+          document.documentElement.setAttribute("data-theme", "dark");
+        }
+      } catch (e) {}
+    </script>
   </head>
 
   <body>

@@ -1,7 +1,13 @@
 import { useState, useRef, useEffect, useLayoutEffect, useCallback } from 'react';
 import { invoke, convertFileSrc } from '@tauri-apps/api/core';
 import { formatTime, parseTimeToSeconds } from '../lib/time';
-import './TrimWorkbench.css';
+import { tileAt, tileStyle } from '../lib/storyboard';
+import { IconPlay, IconPause, IconSound, IconSoundOff } from './icons';
+
+// Rendered width of one storyboard tile, in CSS pixels. 160 is the native width
+// of YouTube's `sb1` sheets, so the common case is painted 1:1; a coarser or
+// finer track is scaled to the same box so the hover frame is one size.
+const TILE_DISPLAY_WIDTH = 160;
 
 /**
  * Trim workbench built around a real <video> element.
@@ -15,11 +21,12 @@ import './TrimWorkbench.css';
  * Playback is not, however, the only way a duration can be known, and it is not
  * a precondition for expressing a trim. See `knownDuration` below.
  */
-export default function TrimWorkbench({ url, onChange }) {
+export default function TrimWorkbench({ url, onChange, onClose }) {
   const videoRef = useRef(null);
+  const audioRef = useRef(null);
   const trackRef = useRef(null);
 
-  const [source, setSource] = useState(null);      // { kind, url, title, duration }
+  const [source, setSource] = useState(null);      // { kind, url, title, duration, has_audio, audio_url }
   const [phase, setPhase] = useState('idle');      // idle|probing|proxying|ready|error
   const [error, setError] = useState('');
   const [duration, setDuration] = useState(0);     // from the <video> element
@@ -29,6 +36,22 @@ export default function TrimWorkbench({ url, onChange }) {
   const [dragging, setDragging] = useState(null);  // 'in' | 'out' | null
   const [startInput, setStartInput] = useState('');
   const [endInput, setEndInput] = useState('');
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [muted, setMuted] = useState(false);
+  const [audioBroken, setAudioBroken] = useState(false);
+  // Why the picture is not moving. `buffering` is the element asking for data
+  // it does not have; `stalled` is that request getting nowhere. Both were
+  // previously invisible, which is what made a slow 2.9 GB stream look like a
+  // dead play button rather than like a slow stream.
+  const [buffering, setBuffering] = useState(false);
+  const [stalled, setStalled] = useState(false);
+  // A rejected play() request, in words. The empty `.catch(() => {})` this
+  // replaces is the reason the reported failure produced no diagnostic at all.
+  const [playbackNote, setPlaybackNote] = useState('');
+  // Pointer position over the scrub track, as a fraction of its width plus the
+  // timestamp it lands on. Stored as a ratio, not an x, so the hover frame
+  // stays put when the window is resized mid-hover.
+  const [hover, setHover] = useState(null);
 
   // The URL the workbench is currently showing, readable from inside an async
   // callback that started under a previous one. A ref rather than the closed-over
@@ -61,8 +84,9 @@ export default function TrimWorkbench({ url, onChange }) {
       const path = await invoke('fetch_preview_proxy', { url: targetUrl });
       if (latestUrlRef.current !== targetUrl) return;
       // `has_audio: true` explicitly: the source being replaced may have been a
-      // video-only stream, and the proxy yt-dlp just muxed is not silent.
-      setSource((s) => ({ ...s, kind: 'proxy', url: convertFileSrc(path), has_audio: true }));
+      // video-only stream, and the proxy yt-dlp just muxed is not silent. The
+      // separate audio track goes with it — a muxed file carries its own sound.
+      setSource((s) => ({ ...s, kind: 'proxy', url: convertFileSrc(path), has_audio: true, audio_url: null }));
       setPhase('idle');
     } catch (e) {
       if (latestUrlRef.current !== targetUrl) return;
@@ -79,6 +103,11 @@ export default function TrimWorkbench({ url, onChange }) {
       setPhase('probing');
       setError('');
       setDuration(0);
+      setIsPlaying(false);
+      setPlaybackNote('');
+      setBuffering(false);
+      setStalled(false);
+      setHover(null);
       // Cleared together with the duration, and for the same reason. `source`
       // is the *other* place a duration comes from (`probedDuration` below), so
       // leaving the previous video's source in place while a new URL is being
@@ -131,6 +160,126 @@ export default function TrimWorkbench({ url, onChange }) {
   // against the previous video's length is worse than refusing input.
   const canEditTimes = knownDuration != null || phase === 'error';
 
+  // --- why nothing is moving --------------------------------------------------
+
+  // A preview stream can be perfectly healthy and still show a black rectangle
+  // for a long time: a nine-hour recording is a multi-gigabyte file, and the
+  // webview must pull its index before it can paint a single frame. Silence
+  // there is indistinguishable from a broken player, so the element's own
+  // account of what it is waiting for is put on screen.
+  useEffect(() => {
+    const v = videoRef.current;
+    if (!v) return;
+
+    const startWaiting = () => setBuffering(true);
+    const stopWaiting = () => { setBuffering(false); setStalled(false); };
+    // `stalled` means the request has produced no data for three seconds. It is
+    // said differently from ordinary buffering because the remedy differs: one
+    // resolves by waiting, the other usually does not.
+    const onStalled = () => setStalled(true);
+    const onProgress = () => setStalled(false);
+
+    v.addEventListener('waiting', startWaiting);
+    v.addEventListener('seeking', startWaiting);
+    v.addEventListener('canplay', stopWaiting);
+    v.addEventListener('playing', stopWaiting);
+    v.addEventListener('seeked', stopWaiting);
+    v.addEventListener('stalled', onStalled);
+    v.addEventListener('progress', onProgress);
+
+    return () => {
+      v.removeEventListener('waiting', startWaiting);
+      v.removeEventListener('seeking', startWaiting);
+      v.removeEventListener('canplay', stopWaiting);
+      v.removeEventListener('playing', stopWaiting);
+      v.removeEventListener('seeked', stopWaiting);
+      v.removeEventListener('stalled', onStalled);
+      v.removeEventListener('progress', onProgress);
+    };
+  }, [source?.url]);
+
+  // --- the separate audio track ---------------------------------------------
+
+  // A modern YouTube pick is often video-only. When the backend can name an
+  // audio-only companion for it, the preview plays both and stays in step
+  // rather than running silent until a proxy finishes downloading.
+  const audioUrl = source?.has_audio === false ? (source?.audio_url || null) : null;
+  const audioActive = Boolean(audioUrl) && !audioBroken;
+
+  // A new companion track is innocent until it fails on its own account.
+  useEffect(() => { setAudioBroken(false); }, [audioUrl]);
+
+  useEffect(() => {
+    if (!audioActive) return;
+    const v = videoRef.current;
+    const a = audioRef.current;
+    if (!v || !a) return;
+
+    // Two independent media elements will drift — different buffers, different
+    // decode clocks. 150ms is roughly where a viewer starts to notice lip sync
+    // slipping, so that is the correction threshold rather than an exact match
+    // that would re-seek constantly and stutter the sound.
+    const DRIFT_LIMIT = 0.15;
+
+    const resync = () => {
+      if (Math.abs(a.currentTime - v.currentTime) > DRIFT_LIMIT) {
+        try { a.currentTime = v.currentTime; } catch { /* seek refused; the drift check retries */ }
+      }
+    };
+
+    const onPlay = () => {
+      a.playbackRate = v.playbackRate;
+      resync();
+      // Autoplay policy or a decode failure rejects here. Either way the
+      // picture keeps playing; sound is the thing that is optional.
+      a.play().catch(() => {});
+    };
+    const onPause = () => { a.pause(); };
+    const onSeeked = () => { try { a.currentTime = v.currentTime; } catch { /* ignored */ } };
+    const onRate = () => { a.playbackRate = v.playbackRate; };
+    const onVolume = () => { a.muted = v.muted; a.volume = v.volume; };
+    // Video buffering must not leave the audio running on ahead.
+    const onWaiting = () => { a.pause(); };
+    const onPlaying = () => { resync(); if (!v.paused) a.play().catch(() => {}); };
+    const onEnded = () => { a.pause(); };
+    // A failed audio track is dropped in silence: the preview is still a
+    // preview without it, and an error here must never take the picture down.
+    const onAudioError = () => { try { a.pause(); } catch { /* ignored */ } setAudioBroken(true); };
+
+    a.muted = v.muted;
+    a.volume = v.volume;
+    a.playbackRate = v.playbackRate;
+    if (!v.paused) onPlay();
+
+    v.addEventListener('play', onPlay);
+    v.addEventListener('pause', onPause);
+    v.addEventListener('seeked', onSeeked);
+    v.addEventListener('ratechange', onRate);
+    v.addEventListener('volumechange', onVolume);
+    v.addEventListener('waiting', onWaiting);
+    v.addEventListener('playing', onPlaying);
+    v.addEventListener('ended', onEnded);
+    a.addEventListener('error', onAudioError);
+
+    // Seeks and stalls are handled above; this catches the slow accumulating
+    // drift that no single event announces.
+    const driftTimer = setInterval(() => { if (!v.paused) resync(); }, 1000);
+
+    return () => {
+      clearInterval(driftTimer);
+      v.removeEventListener('play', onPlay);
+      v.removeEventListener('pause', onPause);
+      v.removeEventListener('seeked', onSeeked);
+      v.removeEventListener('ratechange', onRate);
+      v.removeEventListener('volumechange', onVolume);
+      v.removeEventListener('waiting', onWaiting);
+      v.removeEventListener('playing', onPlaying);
+      v.removeEventListener('ended', onEnded);
+      a.removeEventListener('error', onAudioError);
+      try { a.pause(); } catch { /* ignored */ }
+    };
+  }, [audioActive, audioUrl, source?.url, phase]);
+
   // --- selection ------------------------------------------------------------
 
   // Clamped against whatever bound is known. With no bound at all the value is
@@ -162,6 +311,126 @@ export default function TrimWorkbench({ url, onChange }) {
     apply(secs);
   };
 
+  // --- transport ------------------------------------------------------------
+
+  /**
+   * Play/pause, with the reason stated when play is refused.
+   *
+   * `play()` returns a promise that rejects for reasons the user can act on —
+   * an undecodable stream, a blocked autoplay policy — and the empty `.catch`
+   * this replaces threw all of them away. That is the same class of bug as the
+   * `console.warn` the dead slider hid inside: a failure the product knows
+   * about and does not say.
+   */
+  const togglePlay = () => {
+    const v = videoRef.current;
+    if (!v) return;
+    if (!v.paused) { v.pause(); return; }
+
+    setPlaybackNote('');
+    const started = v.play();
+    // Older engines return undefined here; only a promise can reject.
+    if (!started || typeof started.catch !== 'function') return;
+
+    started.catch((err) => {
+      const name = err?.name || '';
+      if (name === 'AbortError') {
+        // The request was superseded by a pause or a reload — what happens when
+        // the button is pressed twice, or the playhead moved mid-start. Nothing
+        // failed, so nothing is reported. Handled explicitly, not swallowed.
+        return;
+      }
+      if (name === 'NotSupportedError') {
+        // The stream arrived but this engine cannot decode it. Same remedy as
+        // the element's own error event: fetch a small muxed copy instead.
+        setPlaybackNote('This preview stream cannot be played here. Fetching a small copy instead.');
+        if (source?.kind !== 'proxy') loadProxy(url);
+        return;
+      }
+      if (name === 'NotAllowedError') {
+        setPlaybackNote('The system blocked playback. Press play again, or mute the preview first.');
+        return;
+      }
+      setPlaybackNote(`Could not start playback: ${err?.message || err}`);
+    });
+  };
+
+  const toggleMute = () => {
+    const v = videoRef.current;
+    const next = !muted;
+    setMuted(next);
+    // Written straight onto the element so `volumechange` fires and the
+    // companion audio track follows through the sync effect above.
+    if (v) v.muted = next;
+  };
+
+  // --- storyboard hover frames ------------------------------------------------
+
+  // Absent for most sources: only some extractors publish sprite sheets, and
+  // everything below reduces to "no hover frame" when they do not.
+  const storyboard = source?.storyboard || null;
+
+  /**
+   * Where the pointer is over the track, as a ratio and a timestamp.
+   *
+   * Deliberately separate from `timeFromClientX`, which drives seeking and
+   * therefore requires a decoded, seekable element. Showing a frame does not:
+   * a duration from the probe is enough, so hover frames work even while the
+   * stream itself is still loading — which is precisely when they are most
+   * useful. The scrub bar's own behaviour is untouched.
+   */
+  const hoverAt = (clientX) => {
+    const rect = trackRef.current?.getBoundingClientRect();
+    if (!rect || rect.width === 0 || knownDuration == null) return null;
+    const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+    return { ratio, time: ratio * knownDuration };
+  };
+
+  const hoverTile = hover ? tileAt(storyboard, hover.time) : null;
+
+  // Sheets are fetched one at a time, when first hovered, and never twice: the
+  // `sb1` track of the reported nine-hour video is 135 sheets at ~56 KB, so
+  // loading it up front would be 7.5 MB and 135 requests for frames the user
+  // will mostly never look at. `pendingSheets` remembers what is in flight and
+  // what has failed; `readySheets` is state because a decoded sheet is a reason
+  // to paint. Once decoded, later hovers into the same sheet are a repaint.
+  const pendingSheets = useRef(new Map());
+  const [readySheets, setReadySheets] = useState(() => new Set());
+
+  // A different video means different sheet URLs. The browser's own HTTP cache
+  // still holds anything fetched before, so returning to a video is cheap.
+  useEffect(() => {
+    pendingSheets.current = new Map();
+    setReadySheets(new Set());
+  }, [url]);
+
+  const hoverSheetUrl = hoverTile?.url || null;
+  useEffect(() => {
+    if (!hoverSheetUrl) return;
+    if (pendingSheets.current.has(hoverSheetUrl)) return;
+
+    pendingSheets.current.set(hoverSheetUrl, 'loading');
+    const img = new Image();
+    img.onload = () => {
+      pendingSheets.current.set(hoverSheetUrl, 'ready');
+      setReadySheets((prev) => new Set(prev).add(hoverSheetUrl));
+    };
+    // A sheet that 404s or whose signature has expired is remembered as failed
+    // and never retried. Nothing is said about it: the hover frame is an
+    // enhancement to scrubbing, and its absence must read as "this source has
+    // no thumbnails", not as a fault.
+    img.onerror = () => { pendingSheets.current.set(hoverSheetUrl, 'error'); };
+    img.src = hoverSheetUrl;
+    // No cleanup on purpose. This effect re-runs on every sheet the pointer
+    // crosses, and detaching the handlers there would leave the entry stuck at
+    // "loading" — the sheet would be fetched and then never recorded, so it
+    // could never be painted and would never be retried.
+  }, [hoverSheetUrl]);
+
+  const hoverStyle = hoverSheetUrl && readySheets.has(hoverSheetUrl)
+    ? tileStyle(storyboard, hoverTile, TILE_DISPLAY_WIDTH)
+    : null;
+
   // --- drag handling --------------------------------------------------------
 
   const timeFromClientX = (clientX) => {
@@ -177,8 +446,12 @@ export default function TrimWorkbench({ url, onChange }) {
       const t = timeFromClientX(e.clientX);
       if (dragging === 'in') setIn(t); else setOut(t);
       if (videoRef.current) videoRef.current.currentTime = t;
+      // A handle is being dragged to a moment, which is exactly when the frame
+      // at that moment is wanted. The pointer has left the track's own move
+      // events by now — it is captured on the window — so hover is updated here.
+      setHover(hoverAt(e.clientX));
     };
-    const onUp = () => setDragging(null);
+    const onUp = () => { setDragging(null); setHover(null); };
 
     window.addEventListener('pointermove', onMove);
     window.addEventListener('pointerup', onUp);
@@ -213,43 +486,62 @@ export default function TrimWorkbench({ url, onChange }) {
   const selWidth = inPoint != null && outPoint != null ? Math.abs(pct(outPoint) - pct(inPoint)) : 0;
   const clipLength = inPoint != null && outPoint != null ? Math.abs(outPoint - inPoint) : null;
 
+  // Named states rather than a blank line: clearing `source` on a URL switch is
+  // deliberate, and an empty title would read as a failure.
+  const heading = source?.title
+    || (phase === 'probing' ? 'Reading video information'
+      : phase === 'proxying' ? 'Preparing preview'
+      : phase === 'error' ? 'Preview unavailable'
+      : 'Loading');
+
   return (
-    <div className="bg-gray-900 rounded-xl overflow-hidden shadow-2xl">
-      <div className="bg-gray-800 p-4 border-b border-gray-700">
-        <h3 className="text-white font-semibold">Trim</h3>
-        {/* Named states rather than a blank line: clearing `source` on a URL
-            switch is deliberate, and an empty title would read as a failure. */}
-        <p className="text-gray-400 text-sm truncate">
-          {source?.title || (phase === 'probing' ? 'Reading video info…' : 'Loading…')}
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex items-center gap-3 px-5 pb-2">
+        <span className="label-region shrink-0">Preview</span>
+        <p className="min-w-0 flex-1 truncate text-meta text-fg-muted" title={source?.title || ''}>
+          {heading}
         </p>
+        {onClose && (
+          <button type="button" onClick={onClose} className="btn btn-sm btn-quiet shrink-0">
+            Hide
+          </button>
+        )}
       </div>
 
-      <div className="relative bg-black min-h-[16rem] flex items-center justify-center">
+      {/* The stage. Full-bleed between two hairlines rather than boxed in a
+          card: the picture is the content, and a frame around it would only
+          add a second edge next to the window's own. */}
+      <div className="on-stage relative flex min-h-[6rem] flex-1 items-center justify-center overflow-hidden border-y border-hair bg-stage">
         {phase === 'error' ? (
-          <div className="text-center p-6">
-            <p className="text-red-400 mb-3">{error}</p>
+          <div className="max-w-sm px-6 py-5 text-center">
+            <p className="text-body text-danger">{error}</p>
             <button
+              type="button"
               onClick={() => loadProxy(url)}
-              className="bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm"
+              className="btn btn-secondary mt-3"
             >
-              Try downloading a preview instead
+              Download a preview instead
             </button>
-            <p className="text-gray-500 text-xs mt-3">
-              You can still type start and end times below.
+            <p className="mt-3 text-meta text-white/55">
+              Start and end times can still be typed below.
             </p>
           </div>
         ) : phase === 'proxying' ? (
-          <div className="text-center p-6 text-gray-300">
-            <div className="animate-spin rounded-full h-10 w-10 border-b-2 border-red-500 mx-auto mb-3" />
-            <p>Preparing preview…</p>
-            <p className="text-gray-500 text-sm mt-1">This video has no directly playable stream.</p>
+          <div className="w-full max-w-xs px-6 text-center">
+            <div className="rail" />
+            <p className="mt-3 text-body text-white/85">Preparing preview</p>
+            <p className="mt-1 text-meta text-white/55">
+              This video has no directly playable stream, so a small copy is being fetched.
+            </p>
           </div>
         ) : source?.url ? (
+          <>
           <video
             ref={videoRef}
             src={source.url}
-            controls
-            className="w-full max-h-96"
+            playsInline
+            muted={muted}
+            className="h-full w-full object-contain"
             onLoadedMetadata={(e) => {
               // Ground truth. Never yt-dlp's metadata.
               //
@@ -262,6 +554,9 @@ export default function TrimWorkbench({ url, onChange }) {
               setPhase('ready');
             }}
             onTimeUpdate={(e) => setCurrent(e.currentTarget.currentTime)}
+            onPlay={() => setIsPlaying(true)}
+            onPause={() => setIsPlaying(false)}
+            onEnded={() => setIsPlaying(false)}
             onError={() => {
               // The video-only stream `resolve_preview` may have handed us is
               // very likely playable but not guaranteed to be for every itag,
@@ -272,109 +567,252 @@ export default function TrimWorkbench({ url, onChange }) {
               else { setError('Preview could not be played.'); setPhase('error'); }
             }}
           />
+
+          {/* What the stage is doing while it shows nothing. A black rectangle
+              with no caption is the reported symptom, and on a long recording
+              it can persist for a while entirely legitimately: the webview has
+              to fetch the file's index before it can paint a frame. The same
+              2px rail used elsewhere for indeterminate work, laid across the
+              top edge of the picture rather than parked in the middle of it. */}
+          {(phase !== 'ready' || buffering || stalled) && (
+            <div className="pointer-events-none absolute inset-x-0 top-0">
+              <div className="rail" />
+            </div>
+          )}
+          {/* Keyed on the phase and not on `playable`, which is also false for
+              a live stream whose duration is Infinity — that video plays fine
+              and must not sit under a permanent "loading" caption. */}
+          {phase !== 'ready' ? (
+            <p className="pointer-events-none absolute inset-x-0 top-1/2 -mt-3 px-6 text-center text-body text-white/85">
+              Loading video
+            </p>
+          ) : (buffering || stalled) && (
+            <p className="pointer-events-none absolute bottom-2 left-3 right-3 truncate text-meta text-white/70">
+              {stalled
+                ? 'Still loading. This stream is slow to seek.'
+                : 'Buffering'}
+            </p>
+          )}
+          </>
         ) : (
-          <div className="text-gray-400 p-6">Loading preview…</div>
+          /* Honest about the wait. Reading a URL's information is a full
+             extractor run on the site, measured here at half a minute or more
+             on a first load, and a bare "Reading video information" under a
+             moving rail reads as a hang long before it finishes. The second
+             line is not reassurance for its own sake: the result is cached, so
+             the wait genuinely is a once-per-link cost, and knowing that is what
+             makes waiting it out reasonable rather than something to escape by
+             closing the panel. No countdown and no percentage — nothing here
+             knows how long the site will take. */
+          <div className="w-full max-w-xs px-6 text-center">
+            <div className="rail" />
+            <p className="mt-3 text-body text-white/85">Reading video information</p>
+            <p className="mt-1 text-meta text-white/55">
+              The first read of a link can take up to a minute. Opening the same link
+              again is immediate.
+            </p>
+          </div>
+        )}
+
+        {/* Sound for a video-only pick. Hidden by design: the transport above
+            is the only control surface, and this element follows the video. */}
+        {audioActive && (
+          <audio ref={audioRef} src={audioUrl} preload="auto" className="hidden" />
         )}
       </div>
 
-      {/* A muted preview is a normal outcome, not a fault: modern YouTube serves
-          picture and sound separately, and a video-only stream is what lets the
-          preview appear at once instead of after a full download. Said plainly,
-          in the same muted grey as the other captions — not as an error. */}
-      {phase === 'ready' && source?.kind === 'stream' && source?.has_audio === false && (
-        <p className="bg-gray-800 px-4 py-2 text-xs text-gray-400 border-b border-gray-700">
-          Preview has no sound. The download will include audio.
-        </p>
-      )}
+      {/* Transport. The track doubles as the trim timeline — one ruler for
+          both jobs, so a cut point is placed exactly where the playhead is. */}
+      <div className="flex items-center gap-3 px-5 py-2.5">
+        <button
+          type="button"
+          onClick={togglePlay}
+          disabled={!playable}
+          className="icon-btn shrink-0"
+          aria-label={isPlaying ? 'Pause' : 'Play'}
+          title={isPlaying ? 'Pause' : 'Play'}
+        >
+          {isPlaying ? <IconPause size={18} /> : <IconPlay size={18} />}
+        </button>
 
-      <div className="bg-gray-800 p-4">
         <div
           ref={trackRef}
-          className={`relative h-8 bg-gray-700 rounded-lg ${playable ? 'cursor-pointer' : 'opacity-50 cursor-not-allowed'}`}
+          className={`relative h-6 flex-1 rounded-[3px] bg-sunken ${playable ? 'cursor-pointer' : 'opacity-60'}`}
           onPointerDown={(e) => {
             if (!playable) return;
             const t = timeFromClientX(e.clientX);
             if (videoRef.current) videoRef.current.currentTime = t;
           }}
+          onPointerMove={(e) => setHover(hoverAt(e.clientX))}
+          onPointerLeave={() => { if (!dragging) setHover(null); }}
         >
+          {/* The storyboard frame for the moment under the pointer. Present
+              only once its sheet has decoded, so a slow or missing sheet shows
+              nothing rather than a torn or empty box. `clamp` keeps the frame
+              inside the track at both ends without measuring anything. */}
+          {hoverStyle && (
+            <div
+              className="pointer-events-none absolute bottom-full z-10 mb-2 -translate-x-1/2"
+              style={{ left: `clamp(${TILE_DISPLAY_WIDTH / 2}px, ${hover.ratio * 100}%, calc(100% - ${TILE_DISPLAY_WIDTH / 2}px))` }}
+            >
+              <div className="relative border border-hair-strong bg-stage" style={hoverStyle}>
+                <span className="tnum absolute inset-x-0 bottom-0 bg-black/70 py-px text-center text-[11px] leading-4 text-white">
+                  {formatTime(hover.time)}
+                </span>
+              </div>
+            </div>
+          )}
+          {hoverStyle && (
+            <div
+              className="pointer-events-none absolute inset-y-0 -ml-px w-px bg-fg-muted"
+              style={{ left: `${hover.ratio * 100}%` }}
+            />
+          )}
+
           {selLeft != null && (
             <div
-              className="absolute top-0 h-8 bg-green-500/30 border-x-2 border-green-400 pointer-events-none"
+              className="pointer-events-none absolute inset-y-0 border-x border-accent bg-accent-soft"
               style={{ left: `${selLeft}%`, width: `${selWidth}%` }}
             />
           )}
 
-          <div className="absolute top-0 h-8 w-0.5 bg-white pointer-events-none" style={{ left: `${pct(current)}%` }} />
+          <div
+            className="pointer-events-none absolute inset-y-0 -ml-px w-0.5 bg-fg"
+            style={{ left: `${pct(current)}%` }}
+          />
 
           {playable && inPoint != null && (
             <div
               role="slider" aria-label="Trim start" tabIndex={0}
               aria-valuemin={0} aria-valuemax={duration} aria-valuenow={inPoint}
               onPointerDown={(e) => { e.stopPropagation(); setDragging('in'); }}
-              className="absolute -top-1 h-10 w-3 -ml-1.5 bg-green-400 rounded cursor-ew-resize"
+              className="absolute -inset-y-1 -ml-2 w-4 cursor-ew-resize touch-none"
               style={{ left: `${pct(inPoint)}%` }}
-            />
+            >
+              <span className="absolute inset-y-0 left-1/2 -ml-px w-0.5 bg-accent" />
+              {/* Cap at the top marks the in-point; the out handle's cap sits
+                  at the bottom. Two handles in one accent, told apart by
+                  shape rather than by a second colour. */}
+              <span className="absolute left-1/2 top-0 -ml-1 h-1.5 w-2 bg-accent" />
+            </div>
           )}
           {playable && outPoint != null && (
             <div
               role="slider" aria-label="Trim end" tabIndex={0}
               aria-valuemin={0} aria-valuemax={duration} aria-valuenow={outPoint}
               onPointerDown={(e) => { e.stopPropagation(); setDragging('out'); }}
-              className="absolute -top-1 h-10 w-3 -ml-1.5 bg-red-400 rounded cursor-ew-resize"
+              className="absolute -inset-y-1 -ml-2 w-4 cursor-ew-resize touch-none"
               style={{ left: `${pct(outPoint)}%` }}
-            />
+            >
+              <span className="absolute inset-y-0 left-1/2 -ml-px w-0.5 bg-accent" />
+              <span className="absolute bottom-0 left-1/2 -ml-1 h-1.5 w-2 bg-accent" />
+            </div>
           )}
         </div>
 
-        <div className="flex justify-between text-sm text-gray-400 mt-2">
-          <span>{formatTime(current)}</span>
-          <span>{knownDuration != null ? formatTime(knownDuration) : '—:—'}</span>
+        <button
+          type="button"
+          onClick={toggleMute}
+          disabled={!playable}
+          className="icon-btn shrink-0"
+          aria-label={muted ? 'Unmute preview' : 'Mute preview'}
+          title={muted ? 'Unmute preview' : 'Mute preview'}
+        >
+          {muted ? <IconSoundOff size={18} /> : <IconSound size={18} />}
+        </button>
+
+        <span className="tnum shrink-0 text-meta text-fg-muted">
+          {formatTime(current)} / {knownDuration != null ? formatTime(knownDuration) : '--:--'}
+        </span>
+      </div>
+
+      {/* Why the play button did nothing. Sits directly under the transport it
+          belongs to, not at the foot of the panel with the input errors. */}
+      {playbackNote && (
+        <p className="px-5 pb-1 text-meta text-danger">{playbackNote}</p>
+      )}
+
+      {/* A muted preview is a normal outcome, not a fault: modern YouTube serves
+          picture and sound separately. It is only said when no companion audio
+          track could be played — with one, the preview has sound and the note
+          would be a lie. */}
+      {phase === 'ready' && source?.kind === 'stream' && source?.has_audio === false && !audioActive && (
+        <p className="px-5 pb-1 text-meta text-fg-muted">
+          This preview stream carries no sound. The download will include audio.
+        </p>
+      )}
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-5 pb-4 pt-1">
+        <div className="flex items-center gap-2">
+          <label htmlFor="trim-in" className="label-region">In</label>
+          <input
+            id="trim-in"
+            type="text" value={startInput} disabled={!canEditTimes}
+            placeholder="0:00"
+            aria-label="Trim start time"
+            onChange={(e) => setStartInput(e.target.value)}
+            onBlur={() => applyInput(startInput, setIn)}
+            onKeyDown={(e) => { if (e.key === 'Enter') applyInput(startInput, setIn); }}
+            className="field tnum w-[5.5rem] text-center"
+          />
+          <button
+            type="button" disabled={!playable}
+            onClick={() => setIn(videoRef.current?.currentTime ?? 0)}
+            className="btn btn-sm btn-secondary"
+            title="Set the start point at the playhead"
+          >
+            Mark<kbd className="tnum font-sans text-fg-muted">[</kbd>
+          </button>
         </div>
 
-        <div className="flex flex-wrap items-center gap-2 mt-4">
-          <button disabled={!playable} onClick={() => setIn(videoRef.current?.currentTime ?? 0)}
-            className="bg-green-600 hover:bg-green-500 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm">
-            Set Start <kbd className="ml-1 opacity-70">[</kbd>
+        <div className="flex items-center gap-2">
+          <label htmlFor="trim-out" className="label-region">Out</label>
+          <input
+            id="trim-out"
+            type="text" value={endInput} disabled={!canEditTimes}
+            placeholder="0:00"
+            aria-label="Trim end time"
+            onChange={(e) => setEndInput(e.target.value)}
+            onBlur={() => applyInput(endInput, setOut)}
+            onKeyDown={(e) => { if (e.key === 'Enter') applyInput(endInput, setOut); }}
+            className="field tnum w-[5.5rem] text-center"
+          />
+          <button
+            type="button" disabled={!playable}
+            onClick={() => setOut(videoRef.current?.currentTime ?? 0)}
+            className="btn btn-sm btn-secondary"
+            title="Set the end point at the playhead"
+          >
+            Mark<kbd className="tnum font-sans text-fg-muted">]</kbd>
           </button>
-          <button disabled={!playable} onClick={() => setOut(videoRef.current?.currentTime ?? 0)}
-            className="bg-red-600 hover:bg-red-500 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm">
-            Set End <kbd className="ml-1 opacity-70">]</kbd>
-          </button>
+        </div>
+
+        <div className="ml-auto flex items-center gap-3">
+          {clipLength != null && (
+            <span className="tnum text-meta text-fg-muted">
+              Clip <span className="font-medium text-fg">{formatTime(clipLength)}</span>
+            </span>
+          )}
           {/* Clearing follows whatever can set a value, so a typed-only
               selection is never left with no way to undo it. */}
-          <button disabled={!playable && !canEditTimes} onClick={clearSelection}
-            className="bg-gray-600 hover:bg-gray-500 disabled:opacity-40 text-white px-4 py-2 rounded-lg text-sm">
+          <button
+            type="button" disabled={!playable && !canEditTimes}
+            onClick={clearSelection}
+            className="btn btn-sm btn-quiet"
+          >
             Clear
           </button>
-          {clipLength != null && (
-            <span className="text-blue-300 text-sm ml-auto">Clip length: {formatTime(clipLength)}</span>
-          )}
         </div>
 
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-4">
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">Start (SS, MM:SS or HH:MM:SS)</label>
-            <input
-              type="text" value={startInput} disabled={!canEditTimes}
-              onChange={(e) => setStartInput(e.target.value)}
-              onBlur={() => applyInput(startInput, setIn)}
-              onKeyDown={(e) => { if (e.key === 'Enter') applyInput(startInput, setIn); }}
-              className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-green-500 outline-none disabled:opacity-40"
-            />
-          </div>
-          <div>
-            <label className="block text-xs text-gray-400 mb-1">End (SS, MM:SS or HH:MM:SS)</label>
-            <input
-              type="text" value={endInput} disabled={!canEditTimes}
-              onChange={(e) => setEndInput(e.target.value)}
-              onBlur={() => applyInput(endInput, setOut)}
-              onKeyDown={(e) => { if (e.key === 'Enter') applyInput(endInput, setOut); }}
-              className="w-full bg-gray-700 text-white px-3 py-2 rounded-lg border border-gray-600 focus:border-red-500 outline-none disabled:opacity-40"
-            />
-          </div>
-        </div>
+        {error && phase !== 'error' && (
+          <p className="w-full text-meta text-danger">{error}</p>
+        )}
 
-        {error && phase !== 'error' && <p className="text-red-400 text-xs mt-2">{error}</p>}
+        {playable && (
+          <p className="w-full text-meta text-fg-muted">
+            Arrow keys nudge the playhead a second, Shift for a tenth.
+          </p>
+        )}
       </div>
     </div>
   );

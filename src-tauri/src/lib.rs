@@ -15,6 +15,7 @@ use tauri_plugin_dialog::DialogExt;
 
 mod binary_manager;
 mod jobs;
+mod metadata_cache;
 mod probe;
 mod proc;
 mod queue;
@@ -289,6 +290,7 @@ async fn enqueue_job<R: Runtime>(
     window: Window<R>,
     registry: State<'_, jobs::SharedJobs>,
     concurrency_state: State<'_, ConcurrencyState>,
+    metadata_cache: State<'_, metadata_cache::SharedMetadataCache>,
     url: String,
     format: ytdlp::FormatChoice,
     trim: Option<ytdlp::TrimRange>,
@@ -303,7 +305,7 @@ async fn enqueue_job<R: Runtime>(
     // Lock scope: one insert.
     let id = {
         let mut reg = registry.lock().unwrap();
-        reg.insert(jobs::Job::new(url, format, trim, output_folder))
+        reg.insert(jobs::Job::new(url.clone(), format, trim, output_folder))
     };
 
     // Announced before dispatch, because `pump` emits only for the jobs it can
@@ -313,6 +315,48 @@ async fn enqueue_job<R: Runtime>(
     runner::emit_job(&window, registry.inner(), &id);
 
     runner::pump(window.clone(), registry.inner().clone(), ctx);
+
+    // Deliberately not awaited: fetching title/thumbnail is a network round
+    // trip through yt-dlp (`--dump-single-json`) that can take several
+    // seconds, and `enqueue_job` must return immediately so the job appears
+    // in the queue right away rather than the UI waiting on it. This task
+    // runs entirely off that path, on the async runtime rather than the
+    // caller's turn, and reports back via its own `job-updated` emit once it
+    // lands — same pattern as every progress update the runner emits.
+    //
+    // A probe failure (age-gated video, offline, unsupported site, ...) must
+    // not fail the job: it is logged and nothing is written, leaving the job
+    // exactly as usable as it was — the frontend falls back to the raw URL
+    // and no thumbnail. See `probe::fetch_job_metadata` and
+    // `jobs::JobRegistry::set_metadata` for the empty-means-unknown contract
+    // that makes this safe regardless of whether the download's own
+    // filename-stem guess (`set_output_path`) landed first.
+    {
+        let window = window.clone();
+        let registry = registry.inner().clone();
+        // The same cache `resolve_preview` reads, cloned out of managed state
+        // like `registry` above. If the trim panel already probed this URL the
+        // fetch below returns immediately; if that probe is still running, this
+        // waits on it instead of starting a second one.
+        let cache = metadata_cache.inner().clone();
+        let app_handle = window.app_handle().clone();
+        let id = id.clone();
+        tokio::spawn(async move {
+            match probe::fetch_job_metadata(&app_handle, &cache, &url).await {
+                Ok(meta) => {
+                    // Lock scope: two conditional string writes, no I/O.
+                    {
+                        registry.lock().unwrap().set_metadata(&id, &meta.title, &meta.thumbnail);
+                    }
+                    runner::emit_job(&window, &registry, &id);
+                }
+                Err(e) => {
+                    eprintln!("Metadata probe failed for job {id}: {e}");
+                }
+            }
+        });
+    }
+
     Ok(id)
 }
 
@@ -395,6 +439,10 @@ fn repump<R: Runtime>(
 pub fn run() {
     let job_registry: jobs::SharedJobs = Arc::new(Mutex::new(jobs::JobRegistry::new()));
     let concurrency_state: ConcurrencyState = Arc::new(AtomicU32::new(DEFAULT_CONCURRENCY));
+    // One cache for the whole session, shared by the trim panel's preview probe
+    // and the job queue's metadata fetch — the two callers that used to make the
+    // same 35-second `yt-dlp --dump-single-json` call separately.
+    let metadata_cache: metadata_cache::SharedMetadataCache = metadata_cache::new_shared();
 
     let builder = tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
@@ -402,7 +450,8 @@ pub fn run() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_notification::init())
         .manage(job_registry)
-        .manage(concurrency_state);
+        .manage(concurrency_state)
+        .manage(metadata_cache);
 
     // Android is still served by the legacy single-download command and its
     // global progress state; the desktop path is the job queue alone. The two
