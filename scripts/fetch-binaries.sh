@@ -193,34 +193,177 @@ find_in_extracted() {
   echo "$found"
 }
 
-# Verifies the file at $1 is a plausible executable for $PLATFORM:
-# right size, right magic bytes. Fails loudly otherwise.
-verify_binary() {
-  local f="$1" size magic
+# Soft check: does the file at $1 look like a plausible executable for
+# $PLATFORM (right size, right magic bytes)? Returns 0/1, never exits —
+# safe to call from a conditional (e.g. the idempotency skip path), unlike
+# verify_binary() below. Logs the specific reason on failure.
+binary_looks_valid() {
+  local f="$1"
   if [ ! -f "$f" ]; then
-    fail "Expected binary not found: $f"
+    log "    check failed: $f does not exist"
+    return 1
   fi
 
+  local size
   size="$(wc -c < "$f" | tr -d ' ')"
   if [ "$size" -lt "$MIN_BINARY_SIZE" ]; then
-    fail "File $f is only $size bytes — too small to be a real binary (expected a Git LFS pointer stub or a truncated/error download)."
+    log "    check failed: $f is only $size bytes — too small to be a real binary (expected a Git LFS pointer stub or a truncated/error download)."
+    return 1
   fi
 
+  local magic
   magic="$(head -c 4 "$f" | od -An -tx1 2>/dev/null | tr -d ' \n')"
   case "$PLATFORM" in
     linux-*)
-      [ "$magic" = "7f454c46" ] || fail "File $f does not have an ELF header (magic=$magic). Refusing to install a non-Linux-executable."
+      if [ "$magic" != "7f454c46" ]; then
+        log "    check failed: $f does not have an ELF header (magic=$magic)."
+        return 1
+      fi
       ;;
     macos-*)
       case "$magic" in
         cffaedfe|feedfacf|feedface|cefaedfe|cafebabe|bebafeca) : ;;
-        *) fail "File $f does not have a Mach-O header (magic=$magic). Refusing to install a non-macOS-executable." ;;
+        *)
+          log "    check failed: $f does not have a Mach-O header (magic=$magic)."
+          return 1
+          ;;
       esac
       ;;
     windows-*)
-      [ "${magic:0:4}" = "4d5a" ] || fail "File $f does not have an MZ/PE header (magic=$magic). Refusing to install a non-Windows-executable."
+      if [ "${magic:0:4}" != "4d5a" ]; then
+        log "    check failed: $f does not have an MZ/PE header (magic=$magic)."
+        return 1
+      fi
       ;;
   esac
+
+  return 0
+}
+
+# Verifies the file at $1 is a plausible executable for $PLATFORM. Fails
+# the whole script loudly if not — used right after a fresh download, where
+# there is no sane fallback other than aborting.
+verify_binary() {
+  local f="$1"
+  if ! binary_looks_valid "$f"; then
+    fail "File $f failed integrity checks (size/magic bytes). Refusing to install/trust it."
+  fi
+}
+
+# Computes a checksum of $2 using algorithm $1 (sha256|md5), preferring
+# GNU coreutils tools and falling back to the BSD/macOS equivalents.
+compute_hash() {
+  local algo="$1" file="$2"
+  case "$algo" in
+    sha256)
+      if command -v sha256sum >/dev/null 2>&1; then
+        local out
+        out="$(sha256sum "$file")"
+        echo "${out%% *}"
+      elif command -v shasum >/dev/null 2>&1; then
+        local out
+        out="$(shasum -a 256 "$file")"
+        echo "${out%% *}"
+      else
+        fail "Neither sha256sum nor shasum is available; cannot verify checksum for $file"
+      fi
+      ;;
+    md5)
+      if command -v md5sum >/dev/null 2>&1; then
+        local out
+        out="$(md5sum "$file")"
+        echo "${out%% *}"
+      elif command -v md5 >/dev/null 2>&1; then
+        md5 -q "$file"
+      else
+        fail "Neither md5sum nor md5 is available; cannot verify checksum for $file"
+      fi
+      ;;
+    *)
+      fail "Unknown checksum algorithm: $algo"
+      ;;
+  esac
+}
+
+# Returns "algo:checksums_url" for the given tool on $PLATFORM, or an empty
+# string if the upstream vendor does not publish a checksum for this asset.
+# Checked against each vendor's live release at the time this script was
+# written — see docs/superpowers/notes for the verification log.
+checksum_source() {
+  local tool="$1"
+  case "$tool" in
+    yt-dlp)
+      # yt-dlp publishes a SHA2-256SUMS file covering every release asset.
+      echo "sha256:https://github.com/yt-dlp/yt-dlp/releases/latest/download/SHA2-256SUMS"
+      ;;
+    ffmpeg)
+      case "$PLATFORM" in
+        linux-x64)
+          echo "md5:https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-amd64-static.tar.xz.md5" ;;
+        linux-arm64)
+          echo "md5:https://johnvansickle.com/ffmpeg/releases/ffmpeg-release-arm64-static.tar.xz.md5" ;;
+        windows-x64)
+          echo "sha256:https://github.com/BtbN/FFmpeg-Builds/releases/latest/download/checksums.sha256" ;;
+        *)
+          # macos-x64/macos-arm64: ffmpeg.martin-riedl.de does not publish
+          # a checksum file for its builds (confirmed 404 on the obvious
+          # /checksum and .sha256 endpoints).
+          echo ""
+          ;;
+      esac
+      ;;
+    aria2c)
+      # None of abcfy2/aria2-static-build (linux, windows) or
+      # q741451/aria2c-macos-standalone-binary (macos) publish a checksum
+      # file alongside their release assets. Confirmed by inspecting their
+      # release asset lists — no .sha256/.md5/checksums file present.
+      echo ""
+      ;;
+    *)
+      echo ""
+      ;;
+  esac
+}
+
+# Verifies $3 (a local file just downloaded from $2) against the checksum
+# published for $1 (tool name), if any. No-op (with a log line) if the
+# vendor publishes no checksum for this source. Fails loudly on a mismatch
+# or if the checksums file doesn't list this asset at all.
+verify_checksum_for() {
+  local tool="$1" url="$2" local_file="$3"
+  local spec
+  spec="$(checksum_source "$tool")"
+  if [ -z "$spec" ]; then
+    log "    (no published checksum available for $tool on $PLATFORM — relying on HTTPS + size/magic-byte checks only)"
+    return
+  fi
+
+  local algo="${spec%%:*}"
+  local sums_url="${spec#*:}"
+  local match_name
+  match_name="$(basename "$url")"
+
+  local sums_file="$TMP_ROOT/sums-${tool}-$$"
+  download "$sums_url" "$sums_file"
+
+  local match_name_re="${match_name//./\.}"
+  local expected
+  # The `|| true` neutralizes grep's exit status when nothing matches (a
+  # legitimate, expected outcome here — handled by the -z check below) so
+  # that `set -e`/`pipefail` don't abort this bare assignment before the
+  # check runs and can print a proper fail() message.
+  expected="$(grep -E "[[:space:]]\*?${match_name_re}\$" "$sums_file" | head -n 1 | awk '{print $1}' || true)"
+  if [ -z "$expected" ]; then
+    fail "Could not find a checksum entry for '$match_name' in $sums_url — refusing to trust an unverifiable download."
+  fi
+
+  local actual
+  actual="$(compute_hash "$algo" "$local_file")"
+  if [ "$expected" != "$actual" ]; then
+    fail "Checksum mismatch for $tool asset '$match_name': expected $algo $expected, got $actual. Refusing to install a corrupted or tampered download."
+  fi
+
+  log "    checksum OK ($algo): $match_name"
 }
 
 # Installs $1 (verified source file) as $2 (final dest in BIN_DIR), chmod +x.
@@ -292,15 +435,16 @@ fetch_tool() {
     fail "No source URL defined for $tool on platform $PLATFORM"
   fi
 
-  if [ "$FORCE" -ne 1 ] && [ -x "$dest" ] && [ -f "$dest" ]; then
-    local existing_size
-    existing_size="$(wc -c < "$dest" | tr -d ' ')"
-    if [ "$existing_size" -ge "$MIN_BINARY_SIZE" ]; then
-      log "==> $tool: already present and looks valid ($existing_size bytes), skipping (use --force to re-fetch)"
+  if [ "$FORCE" -ne 1 ] && [ -f "$dest" ]; then
+    chmod +x "$dest" 2>/dev/null || true
+    if binary_looks_valid "$dest"; then
+      local existing_size
+      existing_size="$(wc -c < "$dest" | tr -d ' ')"
+      log "==> $tool: already present and verified valid ($existing_size bytes), skipping (use --force to re-fetch)"
       SKIPPED+=("$tool|$dest|$existing_size bytes")
       return
     else
-      log "==> $tool: existing file at $dest is only $existing_size bytes (likely a Git LFS pointer stub) — refetching"
+      log "==> $tool: existing file at $dest failed validity checks (see above) — refetching"
     fi
   fi
 
@@ -313,10 +457,12 @@ fetch_tool() {
   if [ "$kind" = "raw" ]; then
     local raw_dest="$work_dir/${tool}${EXE_SUFFIX}"
     download "$url" "$raw_dest"
+    verify_checksum_for "$tool" "$url" "$raw_dest"
     resolved_binary="$raw_dest"
   elif [ "$kind" = "archive" ]; then
     local archive_dest="$work_dir/archive-$(basename "$url")"
     download "$url" "$archive_dest"
+    verify_checksum_for "$tool" "$url" "$archive_dest"
     local extract_dir="$work_dir/extracted"
     extract_archive "$archive_dest" "$extract_dir"
     resolved_binary="$(find_in_extracted "$extract_dir" "$inner_name")"
