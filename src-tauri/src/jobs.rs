@@ -153,7 +153,11 @@ impl JobRegistry {
     /// Records the file the downloader actually produced.
     ///
     /// The file's stem doubles as the job title while nothing better is known
-    /// — the registry itself never probes for metadata.
+    /// — the registry itself never probes for metadata. A real metadata title
+    /// from `set_metadata` always wins over this guess, in either arrival
+    /// order: this only fills the title in when it is still empty, and
+    /// `set_metadata` unconditionally overwrites whatever a stem guess left
+    /// behind once real metadata arrives. See `set_metadata`.
     pub fn set_output_path(&mut self, id: &JobId, path: PathBuf) {
         if let Some(h) = self.handles.get_mut(id) {
             if h.job.title.is_empty() {
@@ -165,7 +169,38 @@ impl JobRegistry {
         }
     }
 
-    /// Kills the running process, if any, and marks the job cancelled.
+    /// Applies a metadata probe's result to a job (see `probe::fetch_job_metadata`).
+    ///
+    /// A non-empty `title` always overwrites — including a filename-stem guess
+    /// `set_output_path` already wrote — because a real video title is what
+    /// the user recognises and should win regardless of which arrived first:
+    /// the probe usually finishes well before a download does, but a fast
+    /// download racing a slow probe is not ruled out. An empty `title` (the
+    /// probe failed or the site returned nothing) leaves whatever is already
+    /// there alone, so a stem guess set earlier — or one set later, once the
+    /// download starts — still gets its chance. Same reasoning for
+    /// `thumbnail`, which has no other writer at all.
+    pub fn set_metadata(&mut self, id: &JobId, title: &str, thumbnail: &str) {
+        if let Some(h) = self.handles.get_mut(id) {
+            if !title.is_empty() {
+                h.job.title = title.to_string();
+            }
+            if !thumbnail.is_empty() {
+                h.job.thumbnail = thumbnail.to_string();
+            }
+        }
+    }
+
+    /// Kills the running process *and everything it spawned*, then marks the
+    /// job cancelled.
+    ///
+    /// The whole process group is signalled, not just yt-dlp. yt-dlp does not
+    /// do the downloading itself: trimmed jobs are fetched by an ffmpeg child
+    /// and untrimmed ones by aria2c. Killing only yt-dlp left that grandchild
+    /// running — it went on writing the output file, so a job the UI called
+    /// cancelled still produced one, and it held the inherited pipes open, so
+    /// the runner's reader threads blocked until it finished anyway. See
+    /// `crate::proc`.
     ///
     /// The kill and the reap run on a short-lived detached thread. `cancel`
     /// takes `&mut self`, so every caller holds the shared registry mutex
@@ -180,7 +215,7 @@ impl JobRegistry {
         }
         if let Some(mut child) = child {
             std::thread::spawn(move || {
-                let _ = child.kill();
+                crate::proc::kill_tree(&mut child);
                 let _ = child.wait();
             });
         }
@@ -301,6 +336,87 @@ mod tests {
         let mut reg = JobRegistry::new();
         reg.set_status(&"nonexistent".to_string(), JobStatus::Done);
         reg.update_progress(&"nonexistent".to_string(), JobProgress::default());
+        assert_eq!(reg.list().len(), 0);
+    }
+
+    // --- metadata precedence --------------------------------------------
+    //
+    // Spec: a real metadata title always wins over the filename-stem guess
+    // `set_output_path` makes, in either arrival order; a failed/empty probe
+    // must not erase whatever title is already there.
+
+    #[test]
+    fn metadata_fills_in_title_and_thumbnail_on_a_fresh_job() {
+        let mut reg = JobRegistry::new();
+        let id = reg.insert(sample_job());
+
+        reg.set_metadata(&id, "Real Video Title", "https://img/thumb.jpg");
+
+        let job = reg.get(&id).unwrap();
+        assert_eq!(job.title, "Real Video Title");
+        assert_eq!(job.thumbnail, "https://img/thumb.jpg");
+    }
+
+    #[test]
+    fn a_failed_probe_leaves_an_empty_title_and_thumbnail_alone() {
+        let mut reg = JobRegistry::new();
+        let id = reg.insert(sample_job());
+
+        reg.set_metadata(&id, "", "");
+
+        let job = reg.get(&id).unwrap();
+        assert_eq!(job.title, "", "the UI falls back to the URL when this is empty");
+        assert_eq!(job.thumbnail, "");
+    }
+
+    // The common case: the metadata probe usually resolves well before the
+    // download's own output filename is known.
+    #[test]
+    fn metadata_arriving_before_the_output_path_is_not_overwritten_by_the_stem() {
+        let mut reg = JobRegistry::new();
+        let id = reg.insert(sample_job());
+
+        reg.set_metadata(&id, "Real Video Title", "https://img/thumb.jpg");
+        reg.set_output_path(&id, PathBuf::from("/out/Real Video Title.mp4"));
+
+        assert_eq!(reg.get(&id).unwrap().title, "Real Video Title");
+    }
+
+    // The rare case this whole design exists for: a fast download finishes
+    // before a slow metadata probe returns. The stem guess is a fine title
+    // in the meantime, but the real title must still win once it lands.
+    #[test]
+    fn metadata_arriving_after_the_output_path_overwrites_the_stem_guess() {
+        let mut reg = JobRegistry::new();
+        let id = reg.insert(sample_job());
+
+        reg.set_output_path(&id, PathBuf::from("/out/some_filename_stem.mp4"));
+        assert_eq!(reg.get(&id).unwrap().title, "some_filename_stem");
+
+        reg.set_metadata(&id, "Real Video Title", "https://img/thumb.jpg");
+
+        let job = reg.get(&id).unwrap();
+        assert_eq!(job.title, "Real Video Title");
+        assert_eq!(job.thumbnail, "https://img/thumb.jpg");
+    }
+
+    // A probe that fails after the stem already set a title must not blank it
+    // back out — empty is worse than a filename guess.
+    #[test]
+    fn a_late_failed_probe_does_not_erase_an_existing_stem_title() {
+        let mut reg = JobRegistry::new();
+        let id = reg.insert(sample_job());
+
+        reg.set_output_path(&id, PathBuf::from("/out/some_filename_stem.mp4"));
+        reg.set_metadata(&id, "", "");
+
+        assert_eq!(reg.get(&id).unwrap().title, "some_filename_stem");
+    }
+
+    #[test]
+    fn set_metadata_on_a_missing_job_is_a_no_op_not_a_panic() {
+        let mut reg = JobRegistry::new();
+        reg.set_metadata(&"nonexistent".to_string(), "Title", "https://img/t.jpg");
         assert_eq!(reg.list().len(), 0);
     }
 }

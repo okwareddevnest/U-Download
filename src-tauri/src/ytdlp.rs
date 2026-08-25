@@ -43,9 +43,27 @@ pub fn aria2c_connections(concurrency: u32) -> u32 {
 /// silently snaps the cut to the nearest keyframe — the cause of the off-target
 /// output this replaces. `--force-keyframes-at-cuts` re-encodes only the
 /// boundary GOPs, keeping the cut exact and the interior fast.
-pub fn build_download_args(spec: &DownloadSpec, ffmpeg_path: &str) -> Vec<String> {
+/// `js_runtime` is the `<name>:<path>` value for yt-dlp's `--js-runtimes`, or
+/// `None` when the machine has no JavaScript runtime. Recent yt-dlp needs one
+/// to extract YouTube formats — without it every selector here fails as
+/// "Requested format is not available" — but a missing runtime must still
+/// produce a working command line, so `None` adds no argument at all.
+///
+/// It is a parameter rather than a `DownloadSpec` field for the same reason
+/// `ffmpeg_path` is: both are properties of the installation the runner
+/// resolved, not of the job the user queued.
+pub fn build_download_args(
+    spec: &DownloadSpec,
+    ffmpeg_path: &str,
+    js_runtime: Option<&str>,
+) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
     let trimming = spec.trim.is_some();
+
+    if let Some(runtime) = js_runtime {
+        args.push("--js-runtimes".into());
+        args.push(runtime.to_string());
+    }
 
     args.push("--progress".into());
     args.push("--newline".into());
@@ -116,6 +134,15 @@ pub struct ProgressLine {
     pub total_bytes: Option<u64>,
     pub speed_bytes_per_sec: Option<u64>,
     pub eta_seconds: Option<u64>,
+    /// Media position reached, in seconds, for downloaders that report a
+    /// timeline rather than a byte count.
+    ///
+    /// Only ffmpeg fills this in. ffmpeg never prints a percentage — it does
+    /// not know the length of what it is fetching — so the percentage has to
+    /// be derived by the caller, which is the only party that knows the
+    /// requested section's duration. When this is `Some`, `percentage` is 0.0
+    /// and means nothing; the caller must use this field instead.
+    pub out_time_seconds: Option<f64>,
 }
 
 fn unit_multiplier(unit: &str) -> f64 {
@@ -160,6 +187,14 @@ pub fn parse_progress_line(line: &str) -> Option<ProgressLine> {
         return parse_aria2c_line(trimmed);
     }
 
+    // Every *trimmed* job takes this path. `--download-sections` makes yt-dlp
+    // fetch through ffmpeg instead of the external downloader, so neither
+    // branch above nor the `[download]` branch below ever matches and the job
+    // would sit at 0% for its whole duration.
+    if trimmed.starts_with("frame=") || trimmed.starts_with("size=") {
+        return parse_ffmpeg_line(trimmed);
+    }
+
     if !line.starts_with("[download]") {
         return None;
     }
@@ -190,7 +225,13 @@ pub fn parse_progress_line(line: &str) -> Option<ProgressLine> {
         .and_then(|c| c.get(1))
         .and_then(|m| parse_clock(m.as_str()));
 
-    Some(ProgressLine { percentage, total_bytes, speed_bytes_per_sec, eta_seconds })
+    Some(ProgressLine {
+        percentage,
+        total_bytes,
+        speed_bytes_per_sec,
+        eta_seconds,
+        out_time_seconds: None,
+    })
 }
 
 /// Parses one aria2c console-readout line, of the shape
@@ -235,7 +276,13 @@ fn parse_aria2c_line(line: &str) -> Option<ProgressLine> {
         .and_then(|c| c.get(1))
         .and_then(|m| parse_aria2c_eta(m.as_str()));
 
-    Some(ProgressLine { percentage, total_bytes, speed_bytes_per_sec, eta_seconds })
+    Some(ProgressLine {
+        percentage,
+        total_bytes,
+        speed_bytes_per_sec,
+        eta_seconds,
+        out_time_seconds: None,
+    })
 }
 
 /// Parses aria2c's compact duration (`4s`, `1m4s`, `1h2m3s`) into seconds.
@@ -265,6 +312,54 @@ fn parse_aria2c_eta(token: &str) -> Option<u64> {
         return None;
     }
     Some(total)
+}
+
+/// Parses one ffmpeg status readout, of the shape
+///
+/// ```text
+/// frame=  150 fps= 36 q=32.0 Lsize=     358KiB time=00:00:05.00 bitrate= 586.2kbits/s speed=1.21x
+/// size=     358KiB time=00:00:05.00 bitrate= 586.2kbits/s speed=1.21x
+/// ```
+///
+/// This is the *only* progress a trimmed job produces: `--download-sections`
+/// makes yt-dlp fetch through ffmpeg rather than the external downloader, and
+/// yt-dlp prints no percentage of its own while ffmpeg runs.
+///
+/// `time=` is the one field worth having. ffmpeg reports a position on the
+/// media timeline, not a fraction — it has no idea how long the section is —
+/// so this returns the position and leaves `percentage` at 0.0 for the runner
+/// to fill in from the job's own trim range. `size=` is bytes written so far,
+/// not a total, and `speed=` is a realtime ratio rather than bytes per second;
+/// neither maps onto the byte fields, so both are deliberately dropped instead
+/// of being reported as something they are not.
+///
+/// ffmpeg really does print `time=N/A` — it appears in live output before the
+/// first frame lands. That yields `None`, matching the aria2c startup line:
+/// a 0% update would overwrite a real one.
+fn parse_ffmpeg_line(line: &str) -> Option<ProgressLine> {
+    static FFMPEG_TIME_RE: OnceLock<Regex> = OnceLock::new();
+    let time_re = FFMPEG_TIME_RE
+        .get_or_init(|| Regex::new(r"time=\s*(-?)(\d+):(\d{2}):(\d{2}(?:\.\d+)?)").unwrap());
+
+    let caps = time_re.captures(line)?;
+    let hours: f64 = caps.get(2)?.as_str().parse().ok()?;
+    let minutes: f64 = caps.get(3)?.as_str().parse().ok()?;
+    let seconds: f64 = caps.get(4)?.as_str().parse().ok()?;
+
+    let mut total = hours * 3600.0 + minutes * 60.0 + seconds;
+    // ffmpeg can emit a small negative position while it primes its buffers.
+    // Clamped rather than rejected: the readout is genuine progress output.
+    if caps.get(1).map(|m| m.as_str() == "-").unwrap_or(false) {
+        total = 0.0;
+    }
+
+    Some(ProgressLine {
+        percentage: 0.0,
+        total_bytes: None,
+        speed_bytes_per_sec: None,
+        eta_seconds: None,
+        out_time_seconds: Some(total),
+    })
 }
 
 /// Fallback trim for extractors that do not support `--download-sections`.
@@ -385,14 +480,14 @@ mod tests {
     #[test]
     fn trimmed_job_requests_only_the_selected_section() {
         let spec = spec_with_trim(Some(TrimRange { start: 10.0, end: 20.0 }));
-        let args = build_download_args(&spec, "/bin/ffmpeg");
+        let args = build_download_args(&spec, "/bin/ffmpeg", None);
         assert!(joined(&args).contains("--download-sections *00:00:10.000-00:00:20.000"));
     }
 
     #[test]
     fn trimmed_job_forces_keyframes_at_cuts() {
         let spec = spec_with_trim(Some(TrimRange { start: 10.0, end: 20.0 }));
-        let args = build_download_args(&spec, "/bin/ffmpeg");
+        let args = build_download_args(&spec, "/bin/ffmpeg", None);
         assert!(args.contains(&"--force-keyframes-at-cuts".to_string()));
     }
 
@@ -402,7 +497,7 @@ mod tests {
     fn no_trim_path_ever_uses_stream_copy() {
         for trim in [None, Some(TrimRange { start: 1.0, end: 2.0 })] {
             let spec = spec_with_trim(trim);
-            let args = build_download_args(&spec, "/bin/ffmpeg");
+            let args = build_download_args(&spec, "/bin/ffmpeg", None);
             let text = joined(&args);
             assert!(!text.contains("-c copy"), "stream copy must never appear: {}", text);
             assert!(
@@ -416,7 +511,7 @@ mod tests {
     #[test]
     fn trimmed_job_omits_aria2c() {
         let spec = spec_with_trim(Some(TrimRange { start: 10.0, end: 20.0 }));
-        let args = build_download_args(&spec, "/bin/ffmpeg");
+        let args = build_download_args(&spec, "/bin/ffmpeg", None);
         assert!(!args.contains(&"--external-downloader".to_string()));
         assert!(!joined(&args).contains("aria2c"));
     }
@@ -424,7 +519,7 @@ mod tests {
     #[test]
     fn untrimmed_job_keeps_aria2c_acceleration() {
         let spec = spec_with_trim(None);
-        let args = build_download_args(&spec, "/bin/ffmpeg");
+        let args = build_download_args(&spec, "/bin/ffmpeg", None);
         assert!(args.contains(&"--external-downloader".to_string()));
         assert!(args.contains(&"aria2c".to_string()));
         assert!(!args.contains(&"--download-sections".to_string()));
@@ -436,7 +531,7 @@ mod tests {
             format: FormatChoice::Quick { kind: MediaKind::Mp3, height: None },
             ..spec_with_trim(Some(TrimRange { start: 3.0, end: 9.0 }))
         };
-        let args = build_download_args(&spec, "/bin/ffmpeg");
+        let args = build_download_args(&spec, "/bin/ffmpeg", None);
         assert!(args.contains(&"-x".to_string()));
         assert!(joined(&args).contains("--audio-format mp3"));
         assert!(joined(&args).contains("--download-sections *00:00:03.000-00:00:09.000"));
@@ -448,14 +543,14 @@ mod tests {
             format: FormatChoice::Exact { format_id: "137".to_string() },
             ..spec_with_trim(None)
         };
-        let args = build_download_args(&spec, "/bin/ffmpeg");
+        let args = build_download_args(&spec, "/bin/ffmpeg", None);
         assert!(joined(&args).contains("-f 137+bestaudio/137"));
     }
 
     #[test]
     fn quick_height_maps_to_capped_format_selector() {
         let spec = spec_with_trim(None);
-        let args = build_download_args(&spec, "/bin/ffmpeg");
+        let args = build_download_args(&spec, "/bin/ffmpeg", None);
         assert!(joined(&args).contains("bestvideo[height<=720]+bestaudio/best[height<=720]"));
     }
 
@@ -616,5 +711,110 @@ mod tests {
         let line = "[download] 100% of  120.50MiB in 00:38";
         let p = parse_progress_line(line).expect("should parse");
         assert!((p.percentage - 100.0).abs() < 0.01);
+    }
+
+    // A trimmed job's only progress output. Without this branch every trimmed
+    // download — the whole point of the feature — sat at 0% until it finished.
+    #[test]
+    fn parses_an_ffmpeg_status_line() {
+        let line = "frame=  150 fps= 36 q=32.0 Lsize=     358KiB time=00:00:05.00 bitrate= 586.2kbits/s speed=1.21x";
+        let p = parse_progress_line(line).expect("should parse");
+        assert_eq!(p.out_time_seconds, Some(5.0));
+        // The section length is unknown here, so the parser must not invent a
+        // percentage; the runner derives it from the job's trim range.
+        assert_eq!(p.percentage, 0.0);
+    }
+
+    // Captured verbatim from the bundled ffmpeg 9.0.1, trailing padding and
+    // all. It carries a second clock field, `elapsed=`, which must not be
+    // mistaken for the media position.
+    #[test]
+    fn parses_a_verbatim_line_from_the_bundled_ffmpeg() {
+        let line = "frame=   26 fps=0.0 q=-0.0 size=N/A time=00:00:01.04 bitrate=N/A speed=2.06x elapsed=0:00:00.50    ";
+        let p = parse_progress_line(line).expect("should parse");
+        assert_eq!(p.out_time_seconds, Some(1.04));
+    }
+
+    #[test]
+    fn parses_an_audio_only_ffmpeg_status_line() {
+        let line = "size=     358KiB time=00:01:30.25 bitrate= 586.2kbits/s speed=1.21x";
+        let p = parse_progress_line(line).expect("should parse");
+        assert_eq!(p.out_time_seconds, Some(90.25));
+    }
+
+    #[test]
+    fn parses_an_ffmpeg_position_past_one_hour() {
+        let line = "frame=  150 fps= 36 q=32.0 size=N/A time=01:02:03.50 bitrate=N/A speed= 448x";
+        let p = parse_progress_line(line).expect("should parse");
+        assert_eq!(p.out_time_seconds, Some(3723.5));
+    }
+
+    // Seen in live output. A 0% update here would overwrite a real one, so
+    // this yields nothing at all — the same rule the aria2c startup line follows.
+    #[test]
+    fn ignores_an_ffmpeg_line_with_an_unknown_time() {
+        assert!(parse_progress_line("frame=    0 fps=0.0 q=0.0 size=N/A time=N/A bitrate=N/A speed=N/A").is_none());
+        assert!(parse_progress_line("size=N/A time=N/A bitrate=N/A speed=N/A").is_none());
+    }
+
+    #[test]
+    fn clamps_a_negative_ffmpeg_position_to_zero() {
+        let line = "frame=    0 fps=0.0 q=0.0 size=N/A time=-00:00:00.02 bitrate=N/A speed=N/A";
+        let p = parse_progress_line(line).expect("should parse");
+        assert_eq!(p.out_time_seconds, Some(0.0));
+    }
+
+    // The ffmpeg branch keys off a line prefix; nothing that merely mentions a
+    // time may be dragged into it.
+    #[test]
+    fn ffmpeg_branch_does_not_capture_other_output() {
+        assert!(parse_progress_line("[info] Downloading 1 format(s): 137+140").is_none());
+        assert!(parse_progress_line("ERROR: unable to download video data time=00:00:01.00").is_none());
+    }
+
+    // Without this flag, current yt-dlp resolves no YouTube format at all and
+    // every download fails as "Requested format is not available".
+    #[test]
+    fn js_runtime_is_passed_through_with_its_name_and_path() {
+        let spec = spec_with_trim(None);
+        let args = build_download_args(&spec, "/bin/ffmpeg", Some("node:/usr/local/bin/node"));
+        let i = index_of(&args, "--js-runtimes");
+        assert_eq!(args[i + 1], "node:/usr/local/bin/node");
+    }
+
+    #[test]
+    fn bundled_deno_runtime_keeps_its_own_name() {
+        let spec = spec_with_trim(Some(TrimRange { start: 1.0, end: 2.0 }));
+        let args = build_download_args(&spec, "/bin/ffmpeg", Some("deno:/app/binaries/deno"));
+        let i = index_of(&args, "--js-runtimes");
+        assert_eq!(args[i + 1], "deno:/app/binaries/deno");
+    }
+
+    // A machine with no runtime must still get a command line yt-dlp accepts:
+    // degrade, never fail.
+    #[test]
+    fn absent_js_runtime_adds_no_argument() {
+        for trim in [None, Some(TrimRange { start: 1.0, end: 2.0 })] {
+            let spec = spec_with_trim(trim);
+            let args = build_download_args(&spec, "/bin/ffmpeg", None);
+            assert!(
+                !args.iter().any(|a| a == "--js-runtimes"),
+                "no runtime must mean no flag: {:?}", args
+            );
+            assert!(!joined(&args).contains("--js-runtimes"));
+        }
+    }
+
+    // Regression guard: the byte-oriented parsers must be untouched by the
+    // timeline field the ffmpeg branch introduced.
+    #[test]
+    fn byte_based_progress_reports_no_timeline_position() {
+        let ytdlp = parse_progress_line("[download]  42.5% of  120.50MiB at   3.20MiB/s ETA 00:22")
+            .expect("should parse");
+        assert_eq!(ytdlp.out_time_seconds, None);
+
+        let aria = parse_progress_line("[#f1a2b3 1.2MiB/10MiB(12%) CN:16 DL:2.1MiB ETA:4s]")
+            .expect("should parse");
+        assert_eq!(aria.out_time_seconds, None);
     }
 }

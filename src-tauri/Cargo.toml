@@ -1,6 +1,6 @@
 [package]
 name = "u-download"
-version = "2.2.5"
+version = "3.0.1"
 description = "Professional YouTube downloader with GUI"
 authors = ["Dedan Okware<softengde@gmail.com>"]
 edition = "2021"
@@ -38,3 +38,10 @@ url = "2.4"
 scraper = "0.18"
 rand = "0.8"
 uuid = { version = "1.25.0", features = ["v4"] }
+
+# Used only to signal a whole process group on cancel. yt-dlp is not the
+# process doing the downloading — ffmpeg (trimmed jobs) and aria2c (untrimmed
+# ones) are its children — so killing the direct child alone leaves the real
+# worker running. See `src/proc.rs`.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

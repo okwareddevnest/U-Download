@@ -46,6 +46,9 @@ jobs:
           - platform: ubuntu-22.04
             args: ''
             binary_platform: linux-x64
+          - platform: ubuntu-22.04-arm
+            args: ''
+            binary_platform: linux-arm64
           - platform: macos-latest
             args: '--target aarch64-apple-darwin'
             binary_platform: macos-arm64

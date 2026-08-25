@@ -21,9 +21,15 @@ export function parseTimeToSeconds(value) {
 /**
  * Formats seconds as "M:SS", or "H:MM:SS" once past an hour. The hours case
  * matters: long videos are exactly where trimming is most used.
+ *
+ * Non-finite input renders as "0:00". A live stream gives a <video> element a
+ * duration of `Infinity`, which is truthy, so `seconds || 0` let it through and
+ * this rendered "Infinity:NaN:NaN". URL validation now accepts any http(s)
+ * source, so a live stream is reachable input rather than a hypothetical one.
  */
 export function formatTime(seconds) {
-  const t = Math.max(0, Math.floor(seconds || 0));
+  const value = Number(seconds);
+  const t = Number.isFinite(value) ? Math.max(0, Math.floor(value)) : 0;
   const h = Math.floor(t / 3600);
   const m = Math.floor((t % 3600) / 60);
   const s = t % 60;

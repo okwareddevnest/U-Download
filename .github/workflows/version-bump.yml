@@ -39,6 +39,9 @@ jobs:
       - name: Install Tauri CLI
         run: npm install -g @tauri-apps/cli
 
+      - name: Install cargo-edit
+        run: cargo install cargo-edit --locked
+
       - name: Configure git
         run: |
           git config user.name "github-actions[bot]"

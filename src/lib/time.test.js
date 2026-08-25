@@ -57,6 +57,15 @@ describe('formatTime', () => {
     expect(formatTime(undefined)).toBe('0:00');
   });
 
+  // A <video> element reports Infinity for a live stream. Infinity is truthy,
+  // so the previous `seconds || 0` passed it straight through and this
+  // rendered "Infinity:NaN:NaN" across the whole workbench.
+  it('renders a non-finite duration as zero rather than Infinity:NaN:NaN', () => {
+    expect(formatTime(Infinity)).toBe('0:00');
+    expect(formatTime(-Infinity)).toBe('0:00');
+    expect(formatTime(NaN)).toBe('0:00');
+  });
+
   it('round-trips with parseTimeToSeconds', () => {
     for (const secs of [0, 45, 150, 3723, 7199]) {
       expect(parseTimeToSeconds(formatTime(secs))).toBe(secs);

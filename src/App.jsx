@@ -4,9 +4,20 @@ import { invoke } from "@tauri-apps/api/core";
 import { downloadDir, videoDir, join, dirname } from "@tauri-apps/api/path";
 import { isPermissionGranted as notifGranted, requestPermission as notifRequest, sendNotification } from "@tauri-apps/plugin-notification";
 import { useJobs } from "./hooks/useJobs";
+import { useSpeedHistory } from "./hooks/useSpeedHistory";
 import TrimWorkbench from "./components/TrimWorkbench";
+import QueueItem from "./components/QueueItem";
 import { formatTime } from "./lib/time";
 import soundNotifications from "./SoundNotifications";
+import {
+  IconChevronDown,
+  IconDownload,
+  IconFolder,
+  IconMoon,
+  IconQueue,
+  IconScissors,
+  IconSun,
+} from "./components/icons";
 import "./App.css";
 
 // yt-dlp supports 1000+ sites; the extractor decides what is downloadable, and
@@ -19,13 +30,6 @@ const isValidUrl = (value) => {
   } catch {
     return false;
   }
-};
-
-const formatSpeed = (bytesPerSec) => {
-  if (!bytesPerSec) return null;
-  const kb = bytesPerSec / 1024;
-  if (kb < 1024) return `${kb.toFixed(0)} KB/s`;
-  return `${(kb / 1024).toFixed(1)} MB/s`;
 };
 
 function App() {
@@ -60,6 +64,11 @@ function App() {
 
   const { jobs, error: jobsError, enqueue, cancel } = useJobs({ onDone: handleJobDone });
 
+  // Throughput history is not stored anywhere but here: it is accumulated from
+  // the progress events the queue already re-renders on, and it dies with the
+  // window. See useSpeedHistory for the window size and the pruning.
+  const speedHistory = useSpeedHistory(jobs);
+
   // Play a failure sound / notification the first time a job transitions into
   // "failed", mirroring the old failed-download handling without popping an
   // alert per job (multiple jobs can fail independently in the queue model).
@@ -86,6 +95,13 @@ function App() {
 
   useEffect(() => {
     localStorage.setItem("isDarkMode", JSON.stringify(isDarkMode));
+  }, [isDarkMode]);
+
+  // The palette lives on the document element so the page background, the
+  // native form controls and the scrollbars all switch with it — not just the
+  // subtree React happens to own.
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', isDarkMode ? 'dark' : 'light');
   }, [isDarkMode]);
 
   // Load app version from Tauri (fallback to dev if unavailable)
@@ -276,7 +292,7 @@ function App() {
         const ffmpeg = await invoke("check_ffmpeg");
         ffmpegResult = `\n\n${ffmpeg}`;
       } catch (error) {
-        ffmpegResult = `\n\n❌ FFmpeg: Bundled binary not found (${error})`;
+        ffmpegResult = `\n\nFFmpeg: bundled binary not found (${error})`;
       }
 
       alert(`Dependencies Check:\n\n${result}${ffmpegResult}`);
@@ -285,383 +301,201 @@ function App() {
     }
   };
 
+  const urlIsValid = isValidUrl(url);
+  const urlIsBad = Boolean(url) && !urlIsValid;
+  const canDownload = urlIsValid && Boolean(outputFolder);
+
+  // One sentence that names what is missing and what to do about it, in place
+  // of a checklist of ticks.
+  const blockingHint = !url
+    ? "Paste a video link to begin."
+    : !urlIsValid
+      ? "The link must start with http:// or https://."
+      : !outputFolder
+        ? "Choose a folder to save into."
+        : null;
+
+  const activeCount = jobs.filter((j) => !['done', 'failed', 'cancelled'].includes(j.status)).length;
+
   return (
-    <div data-theme={isDarkMode ? 'dark' : 'light'} className={`min-h-screen transition-all duration-500 ${
-      isDarkMode
-        ? 'theme-dark bg-gradient-to-br from-gray-900 via-gray-800 to-gray-900'
-        : 'bg-gradient-to-br from-blue-50 via-white to-purple-50'
-    }`}>
-      <div className="container mx-auto px-6 py-8 max-w-5xl">
-        {/* Header */}
-        <div className="flex justify-between items-center mb-12">
-          <div className="flex items-center gap-4">
-            <div className="relative group">
-              <div className={`absolute -inset-2 rounded-xl blur opacity-20 group-hover:opacity-40 transition duration-700 ${
-                isDarkMode ? 'bg-gradient-to-r from-red-600 to-pink-600' : 'bg-gradient-to-r from-red-500 to-pink-500'
-              }`}></div>
-              <div className={`relative w-14 h-14 rounded-xl p-1 border-2 transition-all duration-300 ${
-                isDarkMode
-                  ? 'bg-gray-800/50 border-gray-700/50 group-hover:border-red-500/50'
-                  : 'bg-white/80 border-gray-200/50 group-hover:border-red-500/50'
-              }`}>
-                <img
-                  src="/logo.png"
-                  alt="U-Download Logo"
-                  className="w-full h-full object-contain group-hover:scale-105 transition-transform duration-300"
-                />
-              </div>
-            </div>
-            <div>
-              <h1 className={`text-4xl font-bold bg-gradient-to-r ${
-                isDarkMode
-                  ? 'from-white via-gray-200 to-gray-400 text-transparent bg-clip-text'
-                  : 'from-gray-800 via-gray-900 to-black text-transparent bg-clip-text'
-              }`}>
-                U-Download
-              </h1>
-              <p className={`text-sm font-medium mt-1 ${
-                isDarkMode ? 'text-gray-400' : 'text-gray-600'
-              }`}>
-                Fast & Beautiful YouTube Downloader
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <button
-              onClick={testDependencies}
-              className={`px-3 py-2 rounded-full text-xs font-semibold transition-colors hover:scale-105 ${
-                isDarkMode
-                  ? 'bg-blue-900/30 text-blue-400 border border-blue-400/30 hover:bg-blue-800/40'
-                  : 'bg-blue-100 text-blue-700 border border-blue-200 hover:bg-blue-200'
-              }`}
-            >
-            </button>
-            <div className={`px-3 py-2 rounded-full text-xs font-semibold ${
-              isDarkMode
-                ? 'bg-green-900/30 text-green-400 border border-green-400/30'
-                : 'bg-green-100 text-green-700 border border-green-200'
-            }`}>
-              v {appVersion || 'dev'}
-            </div>
-            <button
-              onClick={toggleTheme}
-              className={`p-3 rounded-full transition-all duration-300 transform hover:scale-110 ${
-                isDarkMode
-                  ? 'bg-gradient-to-r from-yellow-400 to-orange-500 text-white shadow-lg shadow-yellow-500/25'
-                  : 'bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25'
-              }`}
-            >
-              {isDarkMode ? '☀️' : '🌙'}
-            </button>
-          </div>
+    <div className="flex h-full flex-col bg-canvas font-sans text-fg antialiased">
+      <header className="flex h-11 shrink-0 items-center gap-2.5 border-b border-hair px-4">
+        <img src="/logo.png" alt="" className="h-5 w-5 shrink-0 object-contain" />
+        <h1 className="text-ui font-semibold tracking-[-0.01em]">U-Download</h1>
+        <span className="tnum text-micro text-fg-muted">{appVersion || 'dev'}</span>
+
+        <div className="ml-auto flex items-center gap-1">
+          <button type="button" onClick={testDependencies} className="btn btn-sm btn-quiet">
+            Diagnostics
+          </button>
+          <button
+            type="button"
+            onClick={toggleTheme}
+            className="icon-btn"
+            aria-label={isDarkMode ? 'Switch to light theme' : 'Switch to dark theme'}
+            title={isDarkMode ? 'Switch to light theme' : 'Switch to dark theme'}
+          >
+            {isDarkMode ? <IconSun size={18} /> : <IconMoon size={18} />}
+          </button>
         </div>
+      </header>
 
-        {/* Main Card */}
-        <div className={`relative p-8 rounded-3xl backdrop-blur-sm border transition-all duration-500 ${
-          isDarkMode
-            ? 'bg-gray-800/70 border-gray-700/50 shadow-2xl shadow-gray-900/50'
-            : 'bg-white/70 border-gray-200/50 shadow-2xl shadow-gray-900/10'
-        }`}>
-          {/* Animated background decoration */}
-          <div className={`absolute top-0 left-0 w-full h-full rounded-3xl opacity-5 ${
-            isDarkMode ? 'bg-gradient-to-br from-blue-500 to-purple-600' : 'bg-gradient-to-br from-blue-400 to-purple-500'
-          }`}></div>
-
-          {/* URL Input */}
-          <div className="relative mb-8">
-            <label className={`block text-sm font-semibold mb-3 flex items-center gap-2 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-              <span className="text-red-500">🔗</span>
-              Video URL
-            </label>
-            <div className="relative group">
-              <input
-                type="url"
-                value={url}
-                onChange={(e) => setUrl(e.target.value)}
-                placeholder="https://www.youtube.com/watch?v=dQw4w9WgXcQ"
-                className={`w-full px-4 py-4 rounded-2xl border-2 focus:outline-none transition-all duration-300 text-lg ${
-                  isDarkMode
-                    ? 'bg-gray-700/50 border-gray-600/50 text-white placeholder-gray-400 focus:border-red-500/50 focus:bg-gray-700'
-                    : 'bg-white/50 border-gray-300/50 text-gray-900 placeholder-gray-500 focus:border-red-500/50 focus:bg-white'
-                } ${!isValidUrl(url) && url ? 'border-red-500 animate-pulse' : ''} group-hover:shadow-lg`}
-              />
-              <div className={`absolute right-4 top-1/2 -translate-y-1/2 transition-all duration-300 ${
-                isValidUrl(url) ? 'text-green-500 scale-110' : 'text-gray-400'
-              }`}>
-                {isValidUrl(url) ? '✅' : '📎'}
-              </div>
-            </div>
-            {!isValidUrl(url) && url && (
-              <div className="flex items-center gap-2 mt-2 text-red-500 text-sm animate-slide-in">
-                <span>⚠️</span>
-                <p>Please enter a valid URL</p>
-              </div>
+      <main className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto md:grid-cols-[minmax(0,1fr)_24rem] md:grid-rows-1 md:overflow-hidden">
+        {/* ---- Left: everything that describes the download ---------------- */}
+        <section className="flex min-h-0 min-w-0 flex-col">
+          <div className="px-5 pb-4 pt-4">
+            <label htmlFor="video-url" className="label-region">Video link</label>
+            <input
+              id="video-url"
+              type="url"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="https://www.youtube.com/watch?v=..."
+              spellCheck="false"
+              autoComplete="off"
+              className={`field mt-1.5 w-full text-body ${urlIsBad ? 'field-invalid' : ''}`}
+            />
+            {urlIsBad && (
+              <p className="mt-1.5 text-meta text-danger">
+                That is not a valid link. It must start with http:// or https://.
+              </p>
             )}
           </div>
 
-          {/* Video Preview and Trimming */}
-          {showTrim && (
-            <div className="relative mb-8">
-              <TrimWorkbench url={url} onChange={setTrim} />
+          {showTrim ? (
+            <TrimWorkbench url={url} onChange={setTrim} onClose={() => setShowTrim(false)} />
+          ) : (
+            <div className="flex min-h-0 flex-1 flex-col">
+              <div className="flex items-center gap-3 px-5 pb-2">
+                <span className="label-region shrink-0">Preview</span>
+                <p className="min-w-0 flex-1 truncate text-meta text-fg-muted">Not open</p>
+              </div>
+              <div className="flex min-h-[6rem] flex-1 flex-col items-center justify-center gap-3 border-y border-hair bg-stage px-6 text-center">
+                <IconScissors size={22} className="text-white/45" />
+                <p className="max-w-xs text-body text-white/70">
+                  Open the preview to scrub the video and place exact start and end points.
+                </p>
+                <button type="button" onClick={toggleTrim} className="btn btn-secondary">
+                  Open preview
+                </button>
+              </div>
             </div>
           )}
 
-          {/* Trim Mode Toggle */}
-          <div className="relative mb-8">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <button
-                  onClick={toggleTrim}
-                  className={`px-6 py-3 rounded-xl font-semibold text-lg transition-all duration-300 transform hover:scale-105 ${
-                    showTrim
-                      ? 'bg-gradient-to-r from-green-500 to-emerald-600 text-white shadow-lg shadow-green-500/25'
-                      : 'bg-gradient-to-r from-gray-600 to-gray-700 text-white shadow-lg shadow-gray-600/25 hover:from-gray-700 hover:to-gray-800'
-                  }`}
-                >
-                  {showTrim ? '✂️ Exit Trim Mode' : '✂️ Trim Video'}
-                </button>
-
-                {trim && (trim.start !== null || trim.end !== null) && (
-                  <div className="flex items-center gap-2 bg-gray-700/50 px-4 py-2 rounded-lg">
-                    <span className="text-white text-sm">Trim:</span>
-                    {trim.start !== null && (
-                      <span className="text-green-400 text-sm">{formatTime(trim.start)}</span>
-                    )}
-                    <span className="text-white text-sm">-</span>
-                    {trim.end !== null && (
-                      <span className="text-red-400 text-sm">{formatTime(trim.end)}</span>
-                    )}
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
-
-          {/* Download Options */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8">
-            {/* Download Type */}
-            <div className="relative">
-              <label className={`block text-sm font-semibold mb-3 flex items-center gap-2 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-                <span className="text-blue-500">🎬</span>
-                Download Format
-              </label>
-              <div className="relative group">
+          <div className="grid shrink-0 grid-cols-2 gap-4 px-5 pt-4">
+            <div>
+              <label htmlFor="format" className="label-region">Format</label>
+              <div className="relative mt-1.5">
                 <select
+                  id="format"
                   value={downloadType}
                   onChange={(e) => setDownloadType(e.target.value)}
-                  className={`w-full px-4 py-4 pr-10 rounded-2xl border-2 focus:outline-none transition-all duration-300 text-lg cursor-pointer appearance-none ${
-                    isDarkMode
-                      ? 'bg-gray-700/50 border-gray-600/50 text-white focus:border-blue-500/50 focus:bg-gray-700'
-                      : 'bg-white/50 border-gray-300/50 text-gray-900 focus:border-blue-500/50 focus:bg-white'
-                  } group-hover:shadow-lg`}
+                  className="field w-full text-body"
                 >
-                  <option value="mp4">🎥 MP4 (Video)</option>
-                  <option value="mp3">🎵 MP3 (Audio Only)</option>
+                  <option value="mp4">MP4 video</option>
+                  <option value="mp3">MP3 audio only</option>
                 </select>
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
+                <IconChevronDown size={16} className="pointer-events-none absolute right-2.5 top-1/2 -mt-2 text-fg-muted" />
               </div>
             </div>
 
-            {/* Quality */}
-            <div className="relative">
-              <label className={`block text-sm font-semibold mb-3 flex items-center gap-2 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-                <span className="text-green-500">⚡</span>
-                Video Quality
-              </label>
-              <div className="relative group">
+            <div>
+              <label htmlFor="quality" className="label-region">Quality</label>
+              <div className="relative mt-1.5">
                 <select
+                  id="quality"
                   value={quality}
                   onChange={(e) => setQuality(e.target.value)}
-                  className={`w-full px-4 py-4 pr-10 rounded-2xl border-2 focus:outline-none transition-all duration-300 text-lg cursor-pointer appearance-none ${
-                    isDarkMode
-                      ? 'bg-gray-700/50 border-gray-600/50 text-white focus:border-green-500/50 focus:bg-gray-700'
-                      : 'bg-white/50 border-gray-300/50 text-gray-900 focus:border-green-500/50 focus:bg-white'
-                  } group-hover:shadow-lg`}
+                  className="field w-full text-body"
                 >
-                  <option value="360">📱 360p (Mobile)</option>
-                  <option value="480">💻 480p (Standard)</option>
-                  <option value="720">🖥️ 720p (HD)</option>
-                  <option value="1080">🎯 1080p (Full HD)</option>
-                  <option value="best">✨ Best Available</option>
+                  <option value="360">360p</option>
+                  <option value="480">480p</option>
+                  <option value="720">720p</option>
+                  <option value="1080">1080p</option>
+                  <option value="best">Best available</option>
                 </select>
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400 pointer-events-none">
-                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                  </svg>
-                </div>
+                <IconChevronDown size={16} className="pointer-events-none absolute right-2.5 top-1/2 -mt-2 text-fg-muted" />
               </div>
             </div>
           </div>
 
-          {/* Output Folder */}
-          <div className="relative mb-8">
-            <label className={`block text-sm font-semibold mb-3 flex items-center gap-2 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-              <span className="text-purple-500">📁</span>
-              Output Folder
-            </label>
-            <div className="flex gap-3">
-              <div className="flex-1 relative group">
-                <input
-                  type="text"
-                  value={outputFolder || "No folder selected"}
-                  readOnly
-                  className={`w-full px-4 py-4 rounded-2xl border-2 focus:outline-none transition-all duration-300 text-lg cursor-pointer ${
-                    isDarkMode
-                      ? 'bg-gray-700/50 border-gray-600/50 text-white'
-                      : 'bg-white/50 border-gray-300/50 text-gray-900'
-                  } ${!outputFolder ? 'italic text-gray-500' : ''} group-hover:shadow-lg`}
-                />
-                <div className="absolute right-4 top-1/2 -translate-y-1/2 text-gray-400">
-                  📂
-                </div>
+          <div className="shrink-0 px-5 pt-4">
+            <label className="label-region" id="save-to-label">Save to</label>
+            <div className="mt-1.5 flex items-center gap-2">
+              <div
+                className="flex min-w-0 flex-1 items-center gap-2 rounded-field border border-hair-strong bg-panel px-2.5 py-[7px]"
+                aria-labelledby="save-to-label"
+                title={outputFolder || undefined}
+              >
+                <IconFolder size={16} className="shrink-0 text-fg-muted" />
+                <span className={`truncate text-ui ${outputFolder ? '' : 'text-fg-muted'}`}>
+                  {outputFolder || 'No folder chosen yet'}
+                </span>
               </div>
               <button
                 type="button"
                 onClick={selectOutputFolder}
                 disabled={isSelectingFolder}
-                className={`px-8 py-4 rounded-2xl font-semibold text-lg transition-all duration-300 transform hover:scale-105 hover:shadow-xl disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:scale-100 ${
-                  isDarkMode
-                    ? 'bg-gradient-to-r from-purple-600 to-pink-600 text-white shadow-lg shadow-purple-500/25 hover:from-purple-700 hover:to-pink-700'
-                    : 'bg-gradient-to-r from-purple-500 to-pink-500 text-white shadow-lg shadow-purple-500/25 hover:from-purple-600 hover:to-pink-600'
-                }`}
+                className="btn btn-secondary shrink-0"
               >
-                {isSelectingFolder ? (
-                  <div className="flex items-center gap-2">
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-current"></div>
-                    <span>Opening...</span>
-                  </div>
-                ) : (
-                  'Browse'
-                )}
+                {isSelectingFolder ? 'Opening' : outputFolder ? 'Change' : 'Choose'}
               </button>
             </div>
           </div>
 
-          {/* Download Queue */}
-          {jobs.length > 0 && (
-            <div className="relative mb-8">
-              <label className={`block text-sm font-semibold mb-3 flex items-center gap-2 ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-                <span className="text-blue-500">📥</span>
-                Downloads
-              </label>
-              <div className="space-y-3">
-                {jobs.map((job) => {
-                  const { status: jobStatus } = job;
-                  const pct = Math.round(job.progress?.percentage ?? 0);
-                  const speed = formatSpeed(job.progress?.speed_bytes_per_sec);
-                  const eta = job.progress?.eta_seconds != null ? formatTime(job.progress.eta_seconds) : null;
-                  const isTerminal = ['done', 'failed', 'cancelled'].includes(jobStatus);
-                  const isFailed = jobStatus === 'failed';
-                  const isDone = jobStatus === 'done';
-                  return (
-                    <div
-                      key={job.id}
-                      className={`p-4 rounded-2xl border-2 backdrop-blur-sm ${
-                        isFailed
-                          ? (isDarkMode ? 'bg-red-900/30 border-red-500/50' : 'bg-red-50/80 border-red-300/50')
-                          : isDone
-                          ? (isDarkMode ? 'bg-green-900/30 border-green-500/50' : 'bg-green-50/80 border-green-300/50')
-                          : (isDarkMode ? 'bg-gray-700/40 border-gray-600/50' : 'bg-white/60 border-gray-200/50')
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <div className="flex-1 min-w-0">
-                          <p className={`text-sm font-semibold truncate ${isDarkMode ? 'text-gray-200' : 'text-gray-800'}`}>
-                            {job.title || job.url}
-                          </p>
-                          <div className={`h-1.5 rounded mt-2 overflow-hidden ${isDarkMode ? 'bg-gray-700' : 'bg-gray-200'}`}>
-                            <div
-                              className={`h-1.5 rounded transition-all duration-300 ${
-                                isFailed ? 'bg-red-500' : isDone ? 'bg-green-500' : 'bg-blue-500'
-                              }`}
-                              style={{ width: `${pct}%` }}
-                            />
-                          </div>
-                          <div className={`flex items-center gap-3 mt-1 text-xs ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                            <span>{pct}%</span>
-                            {speed && <span>{speed}</span>}
-                            {eta && <span>ETA {eta}</span>}
-                          </div>
-                          {isFailed && job.error && (
-                            <p className="text-xs text-red-400 mt-1 truncate">{job.error}</p>
-                          )}
-                        </div>
-                        <span className={`text-xs font-semibold w-20 text-right capitalize ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
-                          {jobStatus}
-                        </span>
-                        {!isTerminal && (
-                          <button
-                            onClick={() => cancel(job.id)}
-                            className="text-xs font-semibold text-red-400 hover:text-red-300 whitespace-nowrap"
-                          >
-                            Cancel
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-          )}
-
-          {/* Download Button */}
-          <div className="relative">
+          <div className="mt-4 shrink-0 border-t border-hair px-5 py-4">
             <button
+              type="button"
               onClick={startDownload}
-              disabled={!isValidUrl(url) || !outputFolder}
-              className={`relative w-full py-6 px-8 rounded-2xl font-bold text-xl transition-all duration-300 transform overflow-hidden ${
-                !isValidUrl(url) || !outputFolder
-                  ? (isDarkMode ? 'bg-gray-700 text-gray-400 cursor-not-allowed' : 'bg-gray-300 text-gray-500 cursor-not-allowed')
-                  : `bg-gradient-to-r from-red-500 to-pink-500 text-white hover:from-red-600 hover:to-pink-600 hover:scale-105 hover:shadow-2xl ${
-                      isDarkMode ? 'shadow-red-500/25' : 'shadow-red-500/25'
-                    } active:scale-95`
-              }`}
+              disabled={!canDownload}
+              className="btn btn-primary w-full py-2.5 text-body"
             >
-              {/* Animated background for active state */}
-              {isValidUrl(url) && outputFolder && (
-                <div className="absolute top-0 left-0 w-full h-full bg-gradient-to-r from-red-400 to-pink-400 opacity-0 hover:opacity-20 transition-opacity duration-300"></div>
-              )}
-
-              <div className="relative flex items-center justify-center gap-3">
-                <span className="text-2xl">{trim ? '✂️' : '⬇️'}</span>
-                <span>{trim ? 'Trim & Download' : 'Start Download'}</span>
-              </div>
+              <IconDownload size={18} />
+              {trim ? 'Trim and download' : 'Download'}
             </button>
+            <p role="status" className="mt-2 min-h-[1.125rem] text-meta text-fg-muted">
+              {blockingHint || (trim
+                ? <>Clip <span className="tnum text-fg">{formatTime(trim.start)}</span> to <span className="tnum text-fg">{formatTime(trim.end)}</span>, re-encoded with FFmpeg.</>
+                : 'The whole video is downloaded unless a clip is set in the preview.')}
+            </p>
+          </div>
+        </section>
 
-            {/* Download requirements indicator */}
-            {(!isValidUrl(url) || !outputFolder) && (
-              <div className={`mt-4 p-4 rounded-xl border-2 border-dashed ${
-                isDarkMode ? 'border-gray-600 bg-gray-800/30' : 'border-gray-300 bg-gray-50/30'
-              }`}>
-                <div className="flex flex-col gap-2 text-sm">
-                  <div className={`font-semibold flex items-center gap-2 ${isDarkMode ? 'text-gray-300' : 'text-gray-700'}`}>
-                    📋 Required to start download:
-                  </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
-                    <div className={`flex items-center gap-2 ${
-                      isValidUrl(url) ? 'text-green-500' : (isDarkMode ? 'text-gray-400' : 'text-gray-500')
-                    }`}>
-                      {isValidUrl(url) ? '✅' : '⏳'}
-                      Valid URL
-                    </div>
-                    <div className={`flex items-center gap-2 ${
-                      outputFolder ? 'text-green-500' : (isDarkMode ? 'text-gray-400' : 'text-gray-500')
-                    }`}>
-                      {outputFolder ? '✅' : '⏳'}
-                      Output folder selected
-                    </div>
-                  </div>
-                </div>
-              </div>
+        {/* ---- Right: the queue, the only region that scrolls -------------- */}
+        <aside className="flex min-h-0 flex-col border-t border-hair md:border-l md:border-t-0">
+          <div className="flex h-10 shrink-0 items-center gap-3 border-b border-hair px-4">
+            <span className="label-region">Queue</span>
+            {jobs.length > 0 && (
+              <span className="tnum ml-auto text-meta text-fg-muted">
+                {activeCount > 0 ? `${activeCount} active of ${jobs.length}` : `${jobs.length} finished`}
+              </span>
             )}
           </div>
-        </div>
-      </div>
+
+          <div className="scroll-quiet min-h-0 flex-1 overflow-y-auto">
+            {jobs.length === 0 ? (
+              <div className="flex h-full min-h-[12rem] flex-col items-center justify-center gap-2.5 px-8 text-center">
+                <IconQueue size={22} className="text-fg-muted" />
+                <p className="text-body font-medium">Nothing queued</p>
+                <p className="max-w-[16rem] text-meta text-fg-muted">
+                  Downloads appear here with their thumbnail, a trace of the speed
+                  they are running at, and the time remaining. Several can run at
+                  once, and finished files stay listed until you quit.
+                </p>
+              </div>
+            ) : (
+              jobs.map((job) => (
+                <QueueItem
+                  key={job.id}
+                  job={job}
+                  samples={speedHistory[job.id]}
+                  onCancel={cancel}
+                />
+              ))
+            )}
+          </div>
+        </aside>
+      </main>
     </div>
   );
 }

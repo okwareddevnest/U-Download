@@ -58,6 +58,29 @@ fn main() {
                 eprintln!("Warning: Binary not found: {}", src.display());
             }
         }
+
+        // The CA bundle rides along with them. It is data, not a program, so
+        // it is copied without the executable bit — but a dev build that
+        // resolves its binaries out of the target directory needs it there,
+        // otherwise the bundled ffmpeg has no trust store and every HTTPS
+        // fetch it makes (every trimmed download among them) fails
+        // certificate verification. Absent on trees that predate the fetch
+        // script shipping one; resolution degrades to the host's trust store
+        // there, so this is only a warning.
+        let ca_src = binaries_src.join("cacert.pem");
+        if ca_src.exists() {
+            let ca_dst = target_binaries.join("cacert.pem");
+            if let Err(e) = std::fs::copy(&ca_src, &ca_dst) {
+                eprintln!("Warning: Failed to copy cacert.pem to target directory: {}", e);
+            } else {
+                println!("cargo:rerun-if-changed={}", ca_src.display());
+            }
+        } else {
+            eprintln!(
+                "Warning: CA bundle not found: {} — run scripts/fetch-binaries.sh",
+                ca_src.display()
+            );
+        }
     }
     
     // Tell Cargo to rerun this build script if the binaries change
