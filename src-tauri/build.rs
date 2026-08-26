@@ -9,40 +9,62 @@ fn main() {
         .nth(3)
         .expect("Failed to determine target directory")
         .to_path_buf();
-    
+
+    // Build scripts are compiled for and run on the HOST, so `cfg!`/`#[cfg]`
+    // here describes the host machine, not what we are building for. When the
+    // two differ (e.g. an arm64 macOS runner building x86_64-apple-darwin) that
+    // resolves the wrong bundled-binaries directory. Cargo hands the build
+    // script the *target* in these environment variables instead — use them.
+    let target_os = env::var("CARGO_CFG_TARGET_OS").expect("CARGO_CFG_TARGET_OS not set");
+    let target_arch = env::var("CARGO_CFG_TARGET_ARCH").expect("CARGO_CFG_TARGET_ARCH not set");
+
     // Determine the platform-specific binary directory
-    let platform = get_platform_dir();
+    let platform = get_platform_dir(&target_os, &target_arch);
     let binaries_src = PathBuf::from("binaries").join(platform);
-    
+
     // Ensure binaries exist in the source location
     if !binaries_src.exists() {
+        let triple = env::var("TARGET").unwrap_or_else(|_| "<unknown>".to_string());
         panic!(
-            "Binaries directory not found: {}. Please ensure platform-specific binaries are present.",
-            binaries_src.display()
+            "Binaries directory not found: {missing}\n\
+             \n\
+             Resolved platform \"{platform}\" from the build target: \
+             os = {target_os}, arch = {target_arch}, triple = {triple}.\n\
+             (The platform follows the build *target*, not the host, so a \
+             cross-compile needs that target's binaries.)\n\
+             \n\
+             Populate it with:  scripts/fetch-binaries.sh {platform}",
+            missing = binaries_src.display(),
+            platform = platform,
+            target_os = target_os,
+            target_arch = target_arch,
+            triple = triple,
         );
     }
-    
+
     // Copy binaries to the target directory for development builds
     // This ensures they're available when running `cargo run` or `npm run tauri:dev`
     let target_binaries = target_dir.join("binaries").join(platform);
-    
+
     if let Err(e) = std::fs::create_dir_all(&target_binaries) {
         eprintln!("Warning: Failed to create target binaries directory: {}", e);
     } else {
+        // Executable suffix, again from the target rather than the host.
+        let ext = if target_os == "windows" { ".exe" } else { "" };
+
         // Copy each binary
         for binary in &["yt-dlp", "aria2c", "ffmpeg"] {
-            let ext = if cfg!(target_os = "windows") { ".exe" } else { "" };
             let binary_name = format!("{}{}", binary, ext);
-            
+
             let src = binaries_src.join(&binary_name);
             let dst = target_binaries.join(&binary_name);
-            
+
             if src.exists() {
                 if let Err(e) = std::fs::copy(&src, &dst) {
                     eprintln!("Warning: Failed to copy {} to target directory: {}", binary_name, e);
                 } else {
                     println!("cargo:rerun-if-changed={}", src.display());
-                    
+
                     // Set executable permissions on Unix systems
                     #[cfg(unix)]
                     {
@@ -82,51 +104,29 @@ fn main() {
             );
         }
     }
-    
+
     // Tell Cargo to rerun this build script if the binaries change
     println!("cargo:rerun-if-changed=binaries");
-    
+
     tauri_build::build()
 }
 
-fn get_platform_dir() -> &'static str {
-    #[cfg(all(target_os = "windows", target_arch = "x86_64"))]
-    return "windows-x64";
-    
-    #[cfg(all(target_os = "linux", target_arch = "x86_64"))]
-    return "linux-x64";
-    
-    #[cfg(all(target_os = "linux", target_arch = "aarch64"))]
-    return "linux-arm64";
-    
-    #[cfg(all(target_os = "macos", target_arch = "x86_64"))]
-    return "macos-x64";
-    
-    #[cfg(all(target_os = "macos", target_arch = "aarch64"))]
-    return "macos-arm64";
-    
-    #[cfg(all(target_os = "android", target_arch = "aarch64"))]
-    return "android-arm64";
-    
-    #[cfg(all(target_os = "android", target_arch = "arm"))]
-    return "android-arm";
-    
-    #[cfg(all(target_os = "android", target_arch = "x86"))]
-    return "android-x86";
-    
-    #[cfg(all(target_os = "android", target_arch = "x86_64"))]
-    return "android-x64";
-    
-    #[cfg(not(any(
-        all(target_os = "windows", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "x86_64"),
-        all(target_os = "linux", target_arch = "aarch64"),
-        all(target_os = "macos", target_arch = "x86_64"),
-        all(target_os = "macos", target_arch = "aarch64"),
-        all(target_os = "android", target_arch = "aarch64"),
-        all(target_os = "android", target_arch = "arm"),
-        all(target_os = "android", target_arch = "x86"),
-        all(target_os = "android", target_arch = "x86_64"),
-    )))]
-    return "unknown";
+/// Map a build *target* (as reported by Cargo's `CARGO_CFG_TARGET_OS` /
+/// `CARGO_CFG_TARGET_ARCH`) to the bundled-binaries directory name.
+///
+/// These names are also resolved at runtime by `binary_manager.rs`, so they
+/// must stay exactly in sync with it.
+fn get_platform_dir(target_os: &str, target_arch: &str) -> &'static str {
+    match (target_os, target_arch) {
+        ("windows", "x86_64") => "windows-x64",
+        ("linux", "x86_64") => "linux-x64",
+        ("linux", "aarch64") => "linux-arm64",
+        ("macos", "x86_64") => "macos-x64",
+        ("macos", "aarch64") => "macos-arm64",
+        ("android", "aarch64") => "android-arm64",
+        ("android", "arm") => "android-arm",
+        ("android", "x86") => "android-x86",
+        ("android", "x86_64") => "android-x64",
+        _ => "unknown",
+    }
 }
